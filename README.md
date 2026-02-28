@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="https://files.catbox.moe/r509fa.jpg" alt="BMEDIA-MD Banner" width="280" />
+  <img src="https://files.catbox.moe/r509fa.jpg" alt="BMEDIA-MD Banner" width="400" />
 
 # BMEDIA-MD
 ### Powerful WhatsApp Multi-Device Bot
