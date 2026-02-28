@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="https://files.catbox.moe/r509fa.jpg" alt="BMEDIA-MD Banner" width="220" />
+  <img src="https://files.catbox.moe/r509fa.jpg" alt="BMEDIA-MD Banner" width="280" />
 
 # BMEDIA-MD
 ### Powerful WhatsApp Multi-Device Bot
@@ -32,7 +32,6 @@ This README is structured to make setup and deployment easy for both new users a
 > **Watch here:** [BMEDIA-MD YouTube Channel](https://youtube.com/@bmedia-md?si=gT1VObf4ZKddpfal)
 
 ### What this section will include later
-- How to install dependencies
 - How to configure environment variables
 - How to connect the bot to WhatsApp
 - How to deploy on supported platforms
@@ -48,7 +47,7 @@ Common stack used for bots like this:
 - **Node.js**
 - **JavaScript**
 - **WhatsApp MD libraries** such as **Baileys**
-- Optional APIs or external services depending on enabled features
+- Optional APIs and external services
 
 ---
 
@@ -56,6 +55,7 @@ Common stack used for bots like this:
 
 BMEDIA-MD can be used for a wide range of WhatsApp automation tasks, including:
 
+- Keeping groups safe
 - Responding to user commands
 - Group management and admin tools
 - Interactive message flows
@@ -77,80 +77,32 @@ BMEDIA-MD can be used for a wide range of WhatsApp automation tasks, including:
 
 ---
 
-## Installation
-
-### Requirements
-
-Before starting, make sure you have:
-
-- **Node.js** installed
-- **npm** or **yarn**
-- A working internet connection
-- A device or session for WhatsApp pairing
-- Any required API keys for enabled features
-
-### Clone the project
-
-```bash
-git clone <your-repository-link>
-cd BMEDIA-MD
-```
-
-### Install dependencies
-
-```bash
-npm install
-```
-
 ### Configure environment
 
-Create and fill your environment configuration file:
-
-```bash
-cp .env.example .env
-```
-
 Then add the necessary values such as:
-- Session settings
-- Owner number
-- API keys
-- Prefix or bot options
-- Any deployment-specific settings
-
-### Start the bot
-
-```bash
-npm start
-```
-
-If your project uses a different entry point, update the start command accordingly.
-
----
+- OWNER_NUMBER
+- PREFIX
+- EMOJIS
+- etc...
 
 ## Configuration
 
-Depending on how your bot is structured, your setup may include values like:
+Setup may include values like:
 
 ```env
-BOT_NAME=BMEDIA-MD
-BOT_VERSION=V1.0.0
 OWNER_NAME=BMEDIA
-OWNER_NUMBER=237679261475
+BOT_VERSION=V1.0.0
+OWNER_NUMBER=237xxxxxxxxx
 ```
 
 You may also include:
-- API keys
-- Database URLs
-- Session paths
-- Command prefix
-- Mode settings
 - Platform-specific deployment variables
 
 ---
 
 ## Suggested Command Categories
 
-Organize your commands into sections like:
+ Commands are categorized into sections like:
 
 - **General** - basic bot usage and utility
 - **Admin** - group control and moderation
@@ -158,8 +110,10 @@ Organize your commands into sections like:
 - **Search** - information and lookup features
 - **Fun** - games, reactions, or entertainment
 - **Owner** - restricted developer tools
+- **Tools** - contains special commands
+- etc...
 
-This keeps the project easier to maintain and simpler for users to understand.
+This keeps the bot easier to maintain and simpler for users to understand.
 
 ---
 
@@ -190,7 +144,7 @@ If you need help, updates, or want to follow the project, use the links below:
 
 ## Contributing
 
-If this project is open for contribution, you can support by:
+This project is open for contribution, you can support by:
 
 1. Forking the repository
 2. Creating a new feature branch
@@ -198,6 +152,7 @@ If this project is open for contribution, you can support by:
 4. Opening a pull request
 
 You can also contribute by:
+SUBSCRIBING TO MY YOUTUBE CHANNEL
 - Reporting bugs
 - Suggesting features
 - Improving documentation
@@ -205,17 +160,46 @@ You can also contribute by:
 
 ---
 
-## Notes
+## NOTE
 
-- Replace placeholder repository and environment details with your real project values.
-- Add your exact command list when ready.
-- Add your deployment tutorial video link in the **Deployment Tutorials** section later.
+- WATCH THE DEPLOYMENT TUTORIAL VIDEO
 
 ---
 
-## License
+## LICENSE
 
-Add your preferred license here if the project is public.
+This bot is provided under a Custom Proprietary No-Modification License.
+
+**PERMITTED**
+
+*You are allowed to:*
+
+- use this bot for personal or commercial purposes;
+- run and share unmodified copies of this bot;
+- redistribute this bot only in its original form.
+
+**NOT PERMITTED**
+
+You are not allowed to:
+
+- edit, modify, patch, or alter the code;
+- create forks or derivative works;
+- remove copyright or ownership notices;
+- redistribute modified versions of this bot.
+
+**CONDITION**
+
+Any sharing or redistribution must include:
+
+- the original copyright notice;
+- this license text;
+- clear credit to the original author.
+
+**OWNERSHIP**
+
+This bot is licensed, not sold.
+All rights remain with the original author.
+
 
 ---
 
