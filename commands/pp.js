@@ -66,7 +66,7 @@ export default {
 
   name: "pp",
 
-  aliases: ["setpp", "setpfp", "botpp"],
+  aliases: ["setpp", "setpfp"],
 
   category: "OWNER",
 
