@@ -61,6 +61,8 @@ import {
 
 } from "./sessionMongo.js";
 import { handleStartupGroupJoin } from "./control/startupGroupJoinHandler.js";
+import { handleNetlifyDeleteReply } from "./control/netlifyDeleteReplyHandler.js";
+import { handlePOChatbotReply } from "./control/poChatbotHandler.js";
 
 
 const __filename = fileURLToPath(import.meta.url);
@@ -300,28 +302,49 @@ async function safeSend(to, content, opts = {}) {
   catch { return null; }
 }
 
+
 // ----------------------------- TEMP CLEANUP (ON TIMEOUT) -----------------------------
 function tempDirPath() {
   return path.join(process.cwd(), "temp");
 }
 
-function clearTempFolder() {
-  const dir = tempDirPath();
+function downloadTempDirPath() {
+  return path.join(process.cwd(), "download_temp");
+}
+
+function clearDir(dir) {
   try {
     if (!fs.existsSync(dir)) return 0;
+
     let removed = 0;
     for (const name of fs.readdirSync(dir)) {
       const p = path.join(dir, name);
       try {
         const st = fs.statSync(p);
-        if (st.isFile()) { fs.unlinkSync(p); removed++; }
-        else { fs.rmSync(p, { recursive: true, force: true }); removed++; }
+        if (st.isFile()) {
+          fs.unlinkSync(p);
+          removed++;
+        } else {
+          fs.rmSync(p, { recursive: true, force: true });
+          removed++;
+        }
       } catch {}
     }
     return removed;
   } catch {
     return 0;
   }
+}
+
+function clearTempFolder() {
+  const tempRemoved = clearDir(tempDirPath());
+  const downloadTempRemoved = clearDir(downloadTempDirPath());
+
+  return {
+    tempRemoved,
+    downloadTempRemoved,
+    totalRemoved: tempRemoved + downloadTempRemoved,
+  };
 }
 
 // ----------------------------- CONTROL STATE -----------------------------
@@ -851,6 +874,7 @@ await handleJoinApproval(sock, m, from);
 if (await handleLinuxShell(sock, m)) continue;
 if (await handleAntiGroupMention(sock, m)) continue;
 if (await handleGMComment(sock, m)) continue;
+if (await handleNetlifyDeleteReply(sock, m, from, senderJid)) continue;
 
 
 //GETTING CURRENT PREFIX           
@@ -863,7 +887,8 @@ await handleAntiSpam(sock, m, from, activePrefix);
      
             
     if (!text) continue;
-  
+  if (await handlePOChatbotReply(sock, m, from, senderJid, activePrefix)) continue;
+            
 // ------- COMMAND PARSE --------
 const parsed = parseCommand(text, activePrefix);
 if (!parsed) continue;
@@ -929,18 +954,45 @@ try {
   const msg = String(e?.message || e || "");
   const isTimeout = msg.includes("timeout after") || msg.toLowerCase().includes("timeout");
 
-  if (isTimeout) {
-    const removed = clearTempFolder();
-    try {
-      await sock.sendMessage(
-        from,
-        { text: `❌ this command took too long and was terminated\n\n🧹 temp cleared: ${removed} item(s)` },
-        { quoted: m }
-      );
-    } catch {}
-    log(`⏱️ TIMEOUT: ${cmd} | temp cleared: ${removed} | ${msg}`);
-    continue;
-  }
+if (isTimeout) {
+
+  const cleared = clearTempFolder();
+
+  try {
+
+    await sock.sendMessage(
+
+      from,
+
+      {
+
+        text:
+
+          `❌ this command took too long and was terminated\n\n` +
+
+          `🧹 temp cleared: ${cleared.tempRemoved} item(s)\n` +
+
+          `🧹 download_temp cleared: ${cleared.downloadTempRemoved} item(s)\n` +
+
+          `🧹 total cleared: ${cleared.totalRemoved} item(s)`,
+
+      },
+
+      { quoted: m }
+
+    );
+
+  } catch {}
+
+  log(
+
+    `⏱️ TIMEOUT: ${cmd} | temp: ${cleared.tempRemoved} | download_temp: ${cleared.downloadTempRemoved} | total: ${cleared.totalRemoved} | ${msg}`
+
+  );
+
+  continue;
+
+}
 
   log("Message/command error:", msg);
 }
