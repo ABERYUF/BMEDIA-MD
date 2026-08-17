@@ -61,7 +61,6 @@ import {
 
 } from "./sessionMongo.js";
 import { handleStartupGroupJoin } from "./control/startupGroupJoinHandler.js";
-import { handleNetlifyDeleteReply } from "./control/netlifyDeleteReplyHandler.js";
 import { handlePOChatbotReply } from "./control/poChatbotHandler.js";
 
 
@@ -874,7 +873,6 @@ await handleJoinApproval(sock, m, from);
 if (await handleLinuxShell(sock, m)) continue;
 if (await handleAntiGroupMention(sock, m)) continue;
 if (await handleGMComment(sock, m)) continue;
-if (await handleNetlifyDeleteReply(sock, m, from, senderJid)) continue;
 
 
 //GETTING CURRENT PREFIX           
