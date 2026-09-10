@@ -4,7 +4,7 @@
 # BMEDIA-MD
 ### Powerful WhatsApp Multi-Device Bot
 
-**Version:** `V1.0.0`  
+**Version:** `1.0.0`  
 **Author:** **BMEDIA**
 
 [![WhatsApp Contact](https://img.shields.io/badge/WhatsApp-Contact-25D366?style=for-the-badge&logo=whatsapp&logoColor=white)](https://wa.me/+237679261475)
