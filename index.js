@@ -62,6 +62,7 @@ import {
 } from "./sessionMongo.js";
 import { handleStartupGroupJoin } from "./control/startupGroupJoinHandler.js";
 import { handlePOChatbotReply } from "./control/poChatbotHandler.js";
+import { registerGroupGreetingsHandler } from "./handlers/groupGreetingsHandler.js";
 
 
 const __filename = fileURLToPath(import.meta.url);
@@ -771,6 +772,7 @@ const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
   //DEBUGGINGEND  
     
  sock.ev.on("creds.update", saveCreds);
+ registerGroupGreetingsHandler(sock);
     
   sock.ev.on("connection.update", async (update) => {
     const { connection, lastDisconnect } = update || {};
