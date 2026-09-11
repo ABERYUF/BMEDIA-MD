@@ -63,6 +63,7 @@ import {
 import { handleStartupGroupJoin } from "./control/startupGroupJoinHandler.js";
 import { handlePOChatbotReply } from "./control/poChatbotHandler.js";
 import { registerGroupGreetingsHandler } from "./handlers/groupGreetingsHandler.js";
+import { startDailyBibleScheduler } from "./control/dailyBibleHandler.js";
 
 
 const __filename = fileURLToPath(import.meta.url);
