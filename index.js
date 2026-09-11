@@ -773,6 +773,7 @@ const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
     
  sock.ev.on("creds.update", saveCreds);
  registerGroupGreetingsHandler(sock);
+ startDailyBibleScheduler(sock);
     
   sock.ev.on("connection.update", async (update) => {
     const { connection, lastDisconnect } = update || {};
