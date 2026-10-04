@@ -24,6 +24,17 @@ Open the pairing website, enter your WhatsApp number, and follow the instruction
 
 ---
 
+## 🖥️ HOSTING SITES
+
+### 🌐 KATABUMP
+
+****
+
+### 🌐 BOT-HOSTING
+
+****
+---
+
 ## 🚀 About BMEDIA-MD
 
 BMEDIA-MD is a multi-device WhatsApp automation bot built with Node.js and Baileys.
