@@ -28,11 +28,11 @@ Open the pairing website, enter your WhatsApp number, and follow the instruction
 
 ### 🌐 KATABUMP
 
-****
+**https://rl.katabump.fr/6ed919**
 
 ### 🌐 BOT-HOSTING
 
-****
+**https://legacy.bot-hosting.net/?aff=1365142181802807422**
 ---
 
 ## 🚀 About BMEDIA-MD
