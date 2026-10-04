@@ -4,7 +4,7 @@
 
 ---
 
-# 🔑 SESSION ID / PAIRING / TUTORIAL
+# 🔑 SESSION ID / PAIRING
 
 Before deploying BMEDIA-MD, generate your session using one of the official pairing methods below.
 
@@ -22,7 +22,10 @@ Open the pairing website, enter your WhatsApp number, and follow the instruction
 
 > **Important:** Never share your session credentials publicly. Anyone with access to your active WhatsApp session may be able to control the connected account.
 
-### ▶️🎥TUTORIAL VIDEO
+---
+
+# ▶️🎥TUTORIAL VIDEO
+## YOUTUBE VIDEO 1
 **https://youtu.be/Pr9FS8jwGPk**
 
 ---
