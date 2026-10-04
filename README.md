@@ -25,7 +25,7 @@ Open the pairing website, enter your WhatsApp number, and follow the instruction
 ---
 
 # ▶️🎥TUTORIAL VIDEO
-# YOUTUBE VIDEO 1
+### YOUTUBE VIDEO 1
 **https://youtu.be/Pr9FS8jwGPk**
 
 ---
