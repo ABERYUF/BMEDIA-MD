@@ -92,7 +92,6 @@ Configure the required values in your `.env` file or hosting provider environmen
 Typical configuration includes:
 
 ```env
-PORT=3000
 TIMEZONE=Africa/Douala
 
 MONGODB_URI=
