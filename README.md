@@ -1,214 +1,239 @@
-<div align="center">
-  <img src="https://files.catbox.moe/r509fa.jpg" alt="BMEDIA-MD Banner" width="800"/>
-
 # BMEDIA-MD
-### Powerful WhatsApp Multi-Device Bot
 
-**Version:** `1.0.0`  
-**Author:** **BMEDIA**
-
-[![WhatsApp Contact](https://img.shields.io/badge/WhatsApp-Contact-25D366?style=for-the-badge&logo=whatsapp&logoColor=white)](https://wa.me/+237679261475)
-
-[![WhatsApp Channel](https://img.shields.io/badge/WhatsApp-Channel-128C7E?style=for-the-badge&logo=whatsapp&logoColor=white)](https://whatsapp.com/channel/0029Vb4y4trHVvTbIjozUD45)
-
-[![YouTube](https://img.shields.io/badge/YouTube-BMEDIA--MD-FF0000?style=for-the-badge&logo=youtube&logoColor=white)](https://youtube.com/@bmedia-md?si=gT1VObf4ZKddpfal)
-
-[![Community Group](https://img.shields.io/badge/Join-Community_Group-1DA1F2?style=for-the-badge)](https://chat.whatsapp.com/DYtICmmjotB0nkzTvZDjCm?mode=hqctcla)
-
-</div>
+> **Multi-device WhatsApp bot powered by BMEDIA**
 
 ---
 
-## Overview
+# 🔑 SESSION ID / PAIRING
 
-**BMEDIA-MD** is a WhatsApp Multi-Device bot built for automation, utility, and group management. It is designed to help users and admins perform tasks faster inside WhatsApp, including command handling, moderation flows, media features, and smart interactive responses.
+Before deploying BMEDIA-MD, generate your session using one of the official pairing methods below.
 
-This README is structured to make setup and deployment easy for both new users and developers.
+### 🤖 Telegram Pairing Bot
 
----
+**https://t.me/BMEDIAsession_bot?start=ref_7541182143**
 
-## Deployment Tutorials
+Use the Telegram bot to generate your BMEDIA-MD WhatsApp session.
 
-> ## Need help deploying BMEDIA-MD?
-> A full step-by-step video tutorial will be added here later. For now, use the official **YouTube channel** below for tutorials, updates, and future deployment guides:
->
-> **Watch here:** [BMEDIA-MD YouTube Channel](https://youtube.com/@bmedia-md?si=gT1VObf4ZKddpfal)
+### 🌐 Web Pairing
 
-### What this section will include later
-- How to configure environment variables
-- How to connect the bot to WhatsApp
-- How to deploy on supported platforms
-- How to update the bot safely
+**https://bmediamd.koyeb.app**
+
+Open the pairing website, enter your WhatsApp number, and follow the instructions to generate your pairing code/session.
+
+> **Important:** Never share your session credentials publicly. Anyone with access to your active WhatsApp session may be able to control the connected account.
 
 ---
 
-## Tech Stack
+## 🚀 About BMEDIA-MD
 
-This bot is intended for a **JavaScript / Node.js** environment and is suitable for WhatsApp MD development workflows.
+BMEDIA-MD is a multi-device WhatsApp automation bot built with Node.js and Baileys.
 
-Common stack used for bots like this:
-- **Node.js**
-- **JavaScript**
-- **WhatsApp MD libraries** such as **Baileys**
-- Optional APIs and external services
+It is designed to provide a modular command system, WhatsApp automation tools, group-management features, media utilities, status tools, and other extensible bot functionality.
 
 ---
 
-## Core Features
+## ✨ Main Features
 
-BMEDIA-MD can be used for a wide range of WhatsApp automation tasks, including:
-
-- Keeping groups safe
-- Responding to user commands
-- Group management and admin tools
-- Interactive message flows
-- Utility and information commands
-- Media-related features
-- Automation for common moderation tasks
-- Expandable command-based architecture
-
-### Possible feature highlights
-- Anti-delete systems
-- Interactive buttons or menus
-- Media search and delivery
-- Auto responses
-- Admin-only tools
-- Group protection utilities
-- Easy command extension for developers
-
-> Actual command list and modules can be documented here as your bot grows.
+- WhatsApp multi-device support
+- Pairing-code login
+- Telegram and web session generation
+- Modular command architecture
+- Group management tools
+- Anti-link functionality
+- Welcome and goodbye handlers
+- Group status tools
+- Personal status tools
+- Media commands
+- Owner/admin controls
+- Scheduled features
+- MongoDB-backed session support
+- Customizable bot identity and configuration
+- Extendable Node.js command system
 
 ---
 
-### Configure environment
+## 🧩 Requirements
 
-Then add the necessary values such as:
-- OWNER_NUMBER
-- PREFIX
-- EMOJIS
-- etc...
+Before running BMEDIA-MD, make sure your server supports:
 
-## Configuration
+- Node.js
+- npm
+- Internet access
+- A valid BMEDIA-MD WhatsApp session
+- Required environment variables
+- MongoDB where required by your deployment
 
-Setup may include values like:
+---
 
-```env
-OWNER_NAME=BMEDIA
-BOT_VERSION=V1.0.0
-OWNER_NUMBER=237xxxxxxxxx
+## ⚙️ Installation
+
+Clone or upload the BMEDIA-MD project to your server.
+
+Install dependencies:
+
+```bash
+npm install
 ```
 
-You may also include:
-- Platform-specific deployment variables
+Start the bot:
+
+```bash
+npm start
+```
+
+If your deployment uses a different startup script, use the command configured in your `package.json` or hosting panel.
 
 ---
 
-## Suggested Command Categories
+## 🔐 Environment Variables
 
- Commands are categorized into sections like:
+Configure the required values in your `.env` file or hosting provider environment-variable section.
 
-- **General** - basic bot usage and utility
-- **Admin** - group control and moderation
-- **Media** - downloader or media tools
-- **Search** - information and lookup features
-- **Fun** - games, reactions, or entertainment
-- **Owner** - restricted developer tools
-- **Tools** - contains special commands
-- etc...
+Typical configuration includes:
 
-This keeps the bot easier to maintain and simpler for users to understand.
+```env
+PORT=3000
+TIMEZONE=Africa/Douala
 
----
+MONGODB_URI=
+SESSION_DB_NAME=bmedia_sessions
+SESSION_COLLECTION=sessions
 
-## Project Information
+BOT_NAME=BMEDIA-MD
+AUTHOR=BMEDIA
+AUTHOR_NUMBER=
+```
 
-| Field | Value |
-|------|------|
-| Bot Name | **BMEDIA-MD** |
-| Version | **V1.0.0** |
-| Author | **BMEDIA** |
-| WhatsApp Contact | [Chat on WhatsApp](https://wa.me/+237679261475) |
-| WhatsApp Channel | [Join Channel](https://whatsapp.com/channel/0029Vb4y4trHVvTbIjozUD45) |
-| Community Group | [Join Group](https://chat.whatsapp.com/DYtICmmjotB0nkzTvZDjCm?mode=hqctcla) |
-| YouTube Channel | [Visit YouTube](https://youtube.com/@bmedia-md?si=gT1VObf4ZKddpfal) |
+Additional variables may be required depending on the version and enabled features.
+
+> Do not commit private tokens, MongoDB credentials, API keys, WhatsApp session data, or other secrets to a public repository.
 
 ---
 
-## Support and Community
+## 📱 Getting Your Session
 
-If you need help, updates, or want to follow the project, use the links below:
-
-- **WhatsApp Contact:** [https://wa.me/+237679261475](https://wa.me/+237679261475)
-- **WhatsApp Channel:** [Official Channel](https://whatsapp.com/channel/0029Vb4y4trHVvTbIjozUD45)
-- **Community Group:** [Join the Group](https://chat.whatsapp.com/DYtICmmjotB0nkzTvZDjCm?mode=hqctcla)
-- **YouTube Channel:** [BMEDIA-MD Tutorials and Updates](https://youtube.com/@bmedia-md?si=gT1VObf4ZKddpfal)
-
----
-
-## Contributing
-
-This project is open for contribution, you can support by:
-
-1. Forking the repository
-2. Creating a new feature branch
-3. Making clean, tested changes
-4. Opening a pull request
-
-You can also contribute by:
-SUBSCRIBING TO MY YOUTUBE CHANNEL
-- Reporting bugs
-- Suggesting features
-- Improving documentation
-- Sharing deployment tutorials with the community
+1. Open the **Telegram Pairing Bot** or **Web Pairing** link at the top of this README.
+2. Enter your WhatsApp number in international format when requested.
+3. Request a pairing code.
+4. On WhatsApp, open **Linked Devices**.
+5. Choose the option to link a device using a phone number/pairing code.
+6. Enter the generated code.
+7. Allow the pairing service to finish generating your session.
+8. Add the resulting session to your BMEDIA-MD deployment as required.
 
 ---
 
-## NOTE
+## 🖥️ Deployment
 
-- WATCH THE DEPLOYMENT TUTORIAL VIDEO
+BMEDIA-MD can run on a compatible Node.js hosting environment.
 
----
+When deploying:
 
-## LICENSE
-
-This bot is provided under a Custom Proprietary No-Modification License.
-
-**PERMITTED**
-
-*You are allowed to:*
-
-- use this bot for personal or commercial purposes;
-- run and share unmodified copies of this bot;
-- redistribute this bot only in its original form.
-
-**NOT PERMITTED**
-
-You are not allowed to:
-
-- edit, modify, patch, or alter the code;
-- create forks or derivative works;
-- remove copyright or ownership notices;
-- redistribute modified versions of this bot.
-
-**CONDITION**
-
-Any sharing or redistribution must include:
-
-- the original copyright notice;
-- this license text;
-- clear credit to the original author.
-
-**OWNERSHIP**
-
-This bot is licensed, not sold.
-All rights remain with the original author.
-
+- Install project dependencies.
+- Configure all required environment variables.
+- Add a valid WhatsApp session.
+- Ensure the configured Node.js version is compatible with the project's dependencies.
+- Keep your server online if you want the bot available continuously.
 
 ---
 
-<div align="center">
+## 🛡️ Security
 
-**BMEDIA-MD** - Built for WhatsApp automation and community tools.  
-For updates and tutorials, follow the [YouTube Channel](https://youtube.com/@bmedia-md?si=gT1VObf4ZKddpfal).
+For safer operation:
 
-</div>
+- Keep your session private.
+- Never publish your `.env` file.
+- Never expose bot tokens or database credentials.
+- Restrict owner/admin commands.
+- Rotate compromised credentials immediately.
+- Revoke the WhatsApp linked device if a session is leaked.
+- Use trusted hosting and dependencies.
+
+---
+
+## 🧱 Project Structure
+
+The exact structure can vary by BMEDIA-MD version, but the project may contain:
+
+```text
+BMEDIA-MD/
+├── index.js
+├── package.json
+├── .env
+├── handlers/
+├── commands/
+├── lib/
+├── assets/
+└── other project modules
+```
+
+Do not rename or move core files unless you also update the imports and loaders that depend on them.
+
+---
+
+## 🛠️ Troubleshooting
+
+### Bot does not connect
+
+Generate a fresh session and verify that your session configuration is correct.
+
+### Pairing code fails
+
+Confirm that:
+
+- The phone number includes the correct country code.
+- WhatsApp is connected to the internet.
+- You are entering the code before it expires.
+- Your WhatsApp account can link additional devices.
+
+### Bot starts but commands do not work
+
+Check:
+
+- Server logs
+- Installed dependencies
+- Command loader
+- Prefix configuration
+- Owner/admin permissions
+- Environment variables
+
+### Session disconnects
+
+Open WhatsApp → **Linked Devices** and confirm that the BMEDIA-MD device is still connected. Generate a new session if the device was logged out.
+
+---
+
+## 🔄 Updates
+
+When updating BMEDIA-MD:
+
+1. Back up your working configuration.
+2. Preserve your `.env` values.
+3. Preserve required session/database configuration.
+4. Replace only the files included in an update when using a patch.
+5. Run `npm install` if `package.json` dependencies changed.
+6. Restart the bot and inspect the logs.
+
+---
+
+## ⚠️ Disclaimer
+
+BMEDIA-MD is intended for automation, development, and educational use.
+
+Users are responsible for how they deploy and operate the bot and should comply with WhatsApp's applicable terms, platform rules, and local laws.
+
+BMEDIA-MD is not affiliated with or endorsed by WhatsApp or Meta.
+
+---
+
+## 🔗 Official Pairing Links
+
+**Telegram:**  
+https://t.me/BMEDIAsession_bot?start=ref_7541182143
+
+**Website:**  
+https://bmediamd.koyeb.app
+
+---
+
+### POWERED BY BMEDIA
