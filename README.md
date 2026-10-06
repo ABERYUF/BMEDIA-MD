@@ -112,10 +112,6 @@ Typical configuration includes:
 ```env
 TIMEZONE=Africa/Douala
 
-MONGODB_URI=
-SESSION_DB_NAME=bmedia_sessions
-SESSION_COLLECTION=sessions
-
 BOT_NAME=BMEDIA-MD
 AUTHOR=BMEDIA
 AUTHOR_NUMBER=
@@ -253,4 +249,4 @@ https://bmediamd.koyeb.app
 
 ---
 
-### POWERED BY BMEDIA
+# POWERED BY BMEDIA
