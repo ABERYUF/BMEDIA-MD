@@ -478,7 +478,11 @@ export default {
       // replaced atomically, so index.js/package.json are never intentionally
       // removed during an update.
       await copyDirAtomic(cloneDir, ROOT, {
-        skip: (name, _src, _dst, rel) => rel === ".git" || rel.startsWith(`.git${path.sep}`) || name === ".env",
+        skip: (name, _src, _dst, rel) =>
+          rel === ".git" ||
+          rel.startsWith(`.git${path.sep}`) ||
+          name === ".env" ||
+          rel === path.join("assets", "contacts.vcf"),
       });
 
       if (mergedEnvContent || oldEnvContent) {
