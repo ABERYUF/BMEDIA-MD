@@ -121,6 +121,7 @@ const ENV_SUDO_NUMBERS = String(process.env.SUDO_NUMBERS || "").trim();
 // ----------------------------- STATE -----------------------------
 let sock = null;
 let pairingRequested = false;
+let sessionPairGuardLogged = false;
 let ownerNumberCache = "";
 let keepAliveTimer = null;
 let autoReloadTimer = null;
@@ -781,6 +782,7 @@ const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
 
     if (connection === "open") {
       pairingRequested = false;
+      sessionPairGuardLogged = false;
       log("✅ Connected");
       startKeepAlive();
       await notifyOwnerConnected();
@@ -801,7 +803,20 @@ const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
       return startBot();
     }
 
-    if (!sock?.authState?.creds?.registered && !pairingRequested) {
+    // IMPORTANT: never auto-generate a new pairing code when this deployment
+    // was created from an existing SESSION_ID. A restored Baileys session can
+    // report creds.registered=false briefly while the WhatsApp handshake is
+    // still completing. Calling requestPairingCode() in that window mutates
+    // the restored auth state and can lead to 503/401 disconnects.
+    if (state?.creds?.registered !== true && !pairingRequested) {
+      if (SESSION_ID) {
+        if (!sessionPairGuardLogged) {
+          sessionPairGuardLogged = true;
+          log('🔐 SESSION_ID configured. Automatic pairing-code generation is disabled; waiting for restored session to connect.');
+        }
+        return;
+      }
+
       await prepareOwnerNumberIfMissing();
 
       async function requestPairingCodeOnce() {
