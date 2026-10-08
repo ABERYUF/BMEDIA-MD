@@ -64,6 +64,7 @@ import { handleStartupGroupJoin } from "./control/startupGroupJoinHandler.js";
 import { handlePOChatbotReply } from "./control/poChatbotHandler.js";
 import { registerGroupGreetingsHandler } from "./handlers/groupGreetingsHandler.js";
 import { startDailyBibleScheduler } from "./control/dailyBibleHandler.js";
+import { startAutoStatusScheduler } from "./control/autoStatusScheduler.js";
 
 
 const __filename = fileURLToPath(import.meta.url);
@@ -776,6 +777,7 @@ const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
  sock.ev.on("creds.update", saveCreds);
  registerGroupGreetingsHandler(sock);
  startDailyBibleScheduler(sock);
+ startAutoStatusScheduler(sock);
     
   sock.ev.on("connection.update", async (update) => {
     const { connection, lastDisconnect } = update || {};
