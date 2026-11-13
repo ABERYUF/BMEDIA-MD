@@ -1,127 +1,59 @@
-// commands/vv.js (ESM)
-//
-// Extract and resend View Once media.
-// Uses the bot's existing incoming-message cache first so we work with the
-// original WhatsApp message instead of the often-truncated quoted copy.
-
-import {
-  downloadContentFromMessage,
-  downloadMediaMessage,
-  getContentType,
-} from "@whiskeysockets/baileys";
-import P from "pino";
+// commands/vv.js
 import fs from "fs/promises";
-import path from "path";
-import { tmpdir } from "os";
-import { getCachedAntiDeleteMessage } from "../control/antiDeleteHandler.js";
+import { downloadContentFromMessage } from "@whiskeysockets/baileys";
+import { getCachedViewOnce } from "../control/viewOnceCacheHandler.js";
 
-const silentLogger = P({ level: "silent" });
-
-function unwrapMessage(msg) {
+function unwrap(msg) {
   if (!msg) return null;
-
-  // WhatsApp has used several wrappers for View Once / future-proof messages.
-  // Keep unwrapping until we reach the real media payload.
-  const wrappers = [
-    "ephemeralMessage",
-    "viewOnceMessage",
-    "viewOnceMessageV2",
-    "viewOnceMessageV2Extension",
-    "documentWithCaptionMessage",
-    "editedMessage",
-    "associatedChildMessage",
-    "groupStatusMessage",
-    "groupStatusMessageV2",
-  ];
-
-  for (const key of wrappers) {
-    const inner = msg?.[key]?.message;
-    if (inner) return unwrapMessage(inner);
-  }
-
+  if (msg.ephemeralMessage?.message) return unwrap(msg.ephemeralMessage.message);
+  if (msg.viewOnceMessage?.message) return unwrap(msg.viewOnceMessage.message);
+  if (msg.viewOnceMessageV2?.message) return unwrap(msg.viewOnceMessageV2.message);
+  if (msg.viewOnceMessageV2Extension?.message) return unwrap(msg.viewOnceMessageV2Extension.message);
   return msg;
 }
 
-function getQuotedContext(m) {
-  const msg = unwrapMessage(m?.message) || m?.message || {};
-
-  if (msg?.extendedTextMessage?.contextInfo) {
-    return msg.extendedTextMessage.contextInfo;
-  }
-
-  for (const value of Object.values(msg || {})) {
-    if (value?.contextInfo) return value.contextInfo;
-  }
-
-  return null;
+function getContextInfo(m) {
+  const root = unwrap(m?.message) || m?.message || {};
+  return (
+    root?.extendedTextMessage?.contextInfo ||
+    root?.imageMessage?.contextInfo ||
+    root?.videoMessage?.contextInfo ||
+    root?.audioMessage?.contextInfo ||
+    Object.values(root).find((v) => v?.contextInfo)?.contextInfo ||
+    null
+  );
 }
 
 function getQuotedMessage(m) {
-  return getQuotedContext(m)?.quotedMessage || null;
+  return getContextInfo(m)?.quotedMessage || null;
 }
 
-function mediaInfoFromContent(content) {
-  const root = unwrapMessage(content);
+function getQuotedMessageId(m) {
+  return String(getContextInfo(m)?.stanzaId || "").trim();
+}
+
+function detectQuotedMedia(m) {
+  const quoted = getQuotedMessage(m);
+  if (!quoted) return null;
+
+  const wrapped =
+    Boolean(quoted.viewOnceMessage?.message) ||
+    Boolean(quoted.viewOnceMessageV2?.message) ||
+    Boolean(quoted.viewOnceMessageV2Extension?.message);
+
+  const root = unwrap(quoted);
   if (!root) return null;
 
-  const type = getContentType(root);
-
-  if (type === "imageMessage" || root.imageMessage) {
-    const media = root.imageMessage;
-    if (media) return { kind: "image", media, caption: media.caption || "" };
+  if (root.imageMessage && (wrapped || root.imageMessage.viewOnce === true)) {
+    return { type: "image", media: root.imageMessage, caption: root.imageMessage.caption || "", mimetype: root.imageMessage.mimetype || "image/jpeg" };
   }
 
-  if (type === "videoMessage" || root.videoMessage) {
-    const media = root.videoMessage;
-    if (media) return { kind: "video", media, caption: media.caption || "" };
+  if (root.videoMessage && (wrapped || root.videoMessage.viewOnce === true)) {
+    return { type: "video", media: root.videoMessage, caption: root.videoMessage.caption || "", mimetype: root.videoMessage.mimetype || "video/mp4" };
   }
 
-  if (type === "audioMessage" || root.audioMessage) {
-    const media = root.audioMessage;
-    if (media) {
-      return {
-        kind: "audio",
-        media,
-        caption: "",
-        ptt: Boolean(media.ptt),
-        mimetype: media.mimetype || "audio/ogg; codecs=opus",
-      };
-    }
-  }
-
-  return null;
-}
-
-function getOriginalQuotedWAMessage(m, from) {
-  const contextInfo = getQuotedContext(m);
-  if (!contextInfo) return null;
-
-  const quotedId = contextInfo.stanzaId;
-
-  // Best source: the exact original message already received by the bot.
-  if (quotedId) {
-    const cached = getCachedAntiDeleteMessage({
-      remoteJid: from,
-      id: quotedId,
-      participant: contextInfo.participant,
-    });
-
-    if (cached?.message) return cached;
-  }
-
-  // Fallback for messages that arrived before this process started or were
-  // trimmed from the cache. This still lets downloadMediaMessage handle a
-  // complete quoted payload when WhatsApp included one.
-  if (contextInfo.quotedMessage) {
-    return {
-      key: {
-        remoteJid: from,
-        fromMe: false,
-        id: quotedId || `quoted-${Date.now()}`,
-        participant: contextInfo.participant,
-      },
-      message: contextInfo.quotedMessage,
-    };
+  if (root.audioMessage && (wrapped || root.audioMessage.viewOnce === true)) {
+    return { type: "audio", media: root.audioMessage, caption: "", mimetype: root.audioMessage.mimetype || "audio/ogg; codecs=opus", ptt: Boolean(root.audioMessage.ptt) };
   }
 
   return null;
@@ -129,208 +61,87 @@ function getOriginalQuotedWAMessage(m, from) {
 
 async function streamToBuffer(stream) {
   const chunks = [];
-  for await (const chunk of stream) chunks.push(chunk);
+  for await (const chunk of stream) chunks.push(Buffer.from(chunk));
   return Buffer.concat(chunks);
 }
 
-async function downloadFromMediaObject(info) {
-  const stream = await downloadContentFromMessage(info.media, info.kind);
-  return streamToBuffer(stream);
+async function sendExtracted(sock, from, m, info, buffer) {
+  if (!buffer?.length) throw new Error("empty media buffer");
+
+  const caption = `> *POWERED BY BMEDIA*${info.caption ? `\n*Caption:* ${info.caption}` : ""}`;
+
+  if (info.type === "image") {
+    return sock.sendMessage(from, { image: buffer, caption, mimetype: info.mimetype || "image/jpeg" }, { quoted: m });
+  }
+
+  if (info.type === "video") {
+    return sock.sendMessage(from, { video: buffer, caption, mimetype: info.mimetype || "video/mp4" }, { quoted: m });
+  }
+
+  if (info.type === "audio") {
+    await sock.sendMessage(from, { text: "> *POWERED BY BMEDIA*" }, { quoted: m });
+    return sock.sendMessage(from, {
+      audio: buffer,
+      mimetype: info.mimetype || "audio/ogg; codecs=opus",
+      ptt: Boolean(info.ptt)
+    }, { quoted: m });
+  }
+
+  throw new Error("unsupported media type");
 }
 
-async function downloadWithRecovery(sock, fullMessage, info) {
-  let firstError = null;
+async function handle(sock, m, from) {
+  const quotedId = getQuotedMessageId(m);
 
-  // Preferred route. downloadMediaMessage understands wrappers and can use
-  // WhatsApp's media retry/re-upload mechanism for expired CDN links.
-  if (fullMessage?.message) {
-    try {
-      return await downloadMediaMessage(
-        fullMessage,
-        "buffer",
-        {},
-        {
-          logger: sock?.logger || silentLogger,
-          reuploadRequest: sock?.updateMediaMessage
-            ? (msg) => sock.updateMediaMessage(msg)
-            : undefined,
-        }
-      );
-    } catch (err) {
-      firstError = err;
-      console.warn("[VV] Initial media download failed:", err?.message || err);
-    }
-
-    // Current Baileys releases have had cases where an expired 410 response
-    // does not automatically trigger reuploadRequest. Explicitly request one
-    // and retry before giving up.
-    if (typeof sock?.updateMediaMessage === "function") {
+  if (quotedId) {
+    const cached = await getCachedViewOnce(quotedId);
+    if (cached?.file) {
       try {
-        const refreshed = await sock.updateMediaMessage(fullMessage);
-        const retryMessage = refreshed?.message ? refreshed : fullMessage;
-
-        return await downloadMediaMessage(
-          retryMessage,
-          "buffer",
-          {},
-          {
-            logger: sock?.logger || silentLogger,
-            reuploadRequest: (msg) => sock.updateMediaMessage(msg),
-          }
-        );
-      } catch (err) {
-        console.warn("[VV] Media re-upload/retry failed:", err?.message || err);
+        const buffer = await fs.readFile(cached.file);
+        return await sendExtracted(sock, from, m, cached, buffer);
+      } catch (e) {
+        console.log("[vv] cached media read/send failed:", e?.message || e);
       }
     }
   }
 
-  // Last fallback: old low-level path. Useful when WhatsApp supplied a media
-  // object but not enough surrounding WAMessage information.
-  try {
-    return await downloadFromMediaObject(info);
-  } catch (err) {
-    console.error("[VV] Direct media download failed:", err?.message || err);
-    throw firstError || err;
-  }
-}
+  const direct = detectQuotedMedia(m);
 
-async function sendExtracted(sock, m, from, info, buffer) {
-  if (!buffer?.length) throw new Error("Downloaded media was empty");
-
-  const caption =
-    `> *POWERED BY BMEDIA*` +
-    (info.caption ? `\n*Caption:* ${info.caption}` : "");
-
-  if (info.kind === "image") {
-    return sock.sendMessage(from, { image: buffer, caption }, { quoted: m });
-  }
-
-  if (info.kind === "video") {
-    const tempPath = path.join(tmpdir(), `vo_${Date.now()}.mp4`);
-
-    try {
-      await fs.writeFile(tempPath, buffer);
-      return await sock.sendMessage(
-        from,
-        { video: { url: tempPath }, caption },
-        { quoted: m }
-      );
-    } finally {
-      await fs.unlink(tempPath).catch(() => {});
-    }
-  }
-
-  if (info.kind === "audio") {
-    const ext = info.mimetype?.includes("mpeg") ? "mp3" : "ogg";
-    const tempPath = path.join(tmpdir(), `vo_${Date.now()}.${ext}`);
-
-    try {
-      await fs.writeFile(tempPath, buffer);
-      await sock.sendMessage(
-        from,
-        { text: `> *POWERED BY BMEDIA*` },
-        { quoted: m }
-      );
-
-      return await sock.sendMessage(
-        from,
-        {
-          audio: { url: tempPath },
-          mimetype: info.mimetype || "audio/ogg; codecs=opus",
-          ptt: Boolean(info.ptt),
-        },
-        { quoted: m }
-      );
-    } finally {
-      await fs.unlink(tempPath).catch(() => {});
-    }
-  }
-
-  throw new Error(`Unsupported media type: ${info.kind}`);
-}
-
-async function handle(sock, m, from) {
-  const quotedContext = getQuotedContext(m);
-
-  if (!quotedContext?.quotedMessage && !quotedContext?.stanzaId) {
+  if (!direct) {
     return sock.sendMessage(
       from,
-      { text: "❌ Please reply to a view-once image/video/voice-note to extract it." },
-      { quoted: m }
-    );
-  }
-
-  const originalMessage = getOriginalQuotedWAMessage(m, from);
-  const sourceContent = originalMessage?.message || getQuotedMessage(m);
-  const info = mediaInfoFromContent(sourceContent);
-
-  if (!info) {
-    // If key.isViewOnce arrived only as a WhatsApp stub, there is no encrypted
-    // media payload for Baileys to decrypt. Make this distinction in logs while
-    // keeping the user-facing response simple.
-    console.warn(
-      "[VV] View Once media payload unavailable.",
-      JSON.stringify({
-        quotedId: quotedContext?.stanzaId || null,
-        cached: Boolean(originalMessage?.message),
-      })
-    );
-
-    return sock.sendMessage(
-      from,
-      { text: "❌ View-once media could not be recovered. Try replying to it shortly after it is received." },
+      { text: "❌ Reply to a view-once image, video or voice note with .vv.\nIf the media arrived before the new cache handler was installed, it may not be recoverable." },
       { quoted: m }
     );
   }
 
   try {
-    const buffer = await downloadWithRecovery(sock, originalMessage, info);
-    return await sendExtracted(sock, m, from, info, buffer);
-  } catch (err) {
-    console.error("[VV] Extraction failed:", err);
-
+    const stream = await downloadContentFromMessage(direct.media, direct.type);
+    const buffer = await streamToBuffer(stream);
+    return await sendExtracted(sock, from, m, direct, buffer);
+  } catch (e) {
+    console.log("[vv] direct extraction failed:", e?.message || e);
     return sock.sendMessage(
       from,
-      {
-        text:
-          "❌ Failed to extract the view-once media. " +
-          "If it was just received, try again once; older media may no longer be recoverable.",
-      },
+      { text: "❌ This view-once media was not cached when it arrived and WhatsApp no longer allows it to be downloaded.\nNew view-once media received after this fix should work with .vv." },
       { quoted: m }
     );
   }
 }
 
-function pickSock(ctxOrSock) {
-  return ctxOrSock?.sock || ctxOrSock?.conn || ctxOrSock?.client || ctxOrSock;
-}
-
-function pickMessage(ctxOrM) {
-  return ctxOrM?.m || ctxOrM;
-}
-
-function pickFrom(ctx, m) {
-  return ctx?.from || m?.key?.remoteJid || ctx?.chat || ctx?.jid;
-}
-
-const command = {
+export default {
   name: "viewonce",
   aliases: ["vo", "vv"],
   category: "TOOLS",
-  description: "Extract and resend view-once media.",
-
+  description: "Extract and resend replied view-once media.",
   async execute(ctx) {
-    const sock = pickSock(ctx);
-    const m = pickMessage(ctx);
-    const from = pickFrom(ctx, m);
+    const sock = ctx?.sock || ctx?.conn || ctx?.client;
+    const m = ctx?.m;
+    const from = ctx?.from || m?.key?.remoteJid;
+    if (!sock || !m || !from) return;
     return handle(sock, m, from);
   },
-
   async run(sock, m) {
-    const from = m?.key?.remoteJid;
-    return handle(sock, m, from);
-  },
+    return handle(sock, m, m?.key?.remoteJid);
+  }
 };
-
-export { command };
-export default command;
