@@ -764,7 +764,7 @@ const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
     logger: P({ level: "silent" }),
       
       
-    browser: Browsers.macOS("Chrome"),
+    browser: Browsers.android("Chrome"),
     markOnlineOnConnect: true,
   });
 
