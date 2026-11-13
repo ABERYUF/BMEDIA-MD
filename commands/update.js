@@ -41,6 +41,7 @@ const BACKUP_SKIP_TOP_LEVEL = new Set([
   ".git",
   ".tmp",
   ".npm",
+  ".npm-cache",
   ".npm-global",
   ".cache",
   "node_modules",
