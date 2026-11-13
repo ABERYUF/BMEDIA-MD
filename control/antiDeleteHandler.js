@@ -346,6 +346,29 @@ function findCachedMessage(key) {
 
 }
 
+// Read-only cache access for commands that need the original incoming message
+// (for example View Once extraction). We intentionally return a fresh wrapper
+// so callers cannot mutate the cached entry itself.
+export function getCachedAntiDeleteMessage(key) {
+
+  const entry = findCachedMessage(key);
+
+  if (!entry) return null;
+
+  return {
+
+    key: entry.key,
+
+    message: entry.message,
+
+    pushName: entry.pushName || "",
+
+    messageTimestamp: entry.messageTimestamp,
+
+  };
+
+}
+
 // ---------------- DESTINATION ----------------
 
 function getDestinationJid(sock, originalKey) {
