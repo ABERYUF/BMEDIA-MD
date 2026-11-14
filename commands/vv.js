@@ -1,147 +1,194 @@
 // commands/vv.js
-import fs from "fs/promises";
-import { downloadContentFromMessage } from "@whiskeysockets/baileys";
-import { getCachedViewOnce } from "../control/viewOnceCacheHandler.js";
 
-function unwrap(msg) {
-  if (!msg) return null;
-  if (msg.ephemeralMessage?.message) return unwrap(msg.ephemeralMessage.message);
-  if (msg.viewOnceMessage?.message) return unwrap(msg.viewOnceMessage.message);
-  if (msg.viewOnceMessageV2?.message) return unwrap(msg.viewOnceMessageV2.message);
-  if (msg.viewOnceMessageV2Extension?.message) return unwrap(msg.viewOnceMessageV2Extension.message);
+import { downloadContentFromMessage } from "@whiskeysockets/baileys";
+import { findCachedViewOnce } from "../control/viewOnceAlienReactionHandler.js";
+
+function unwrapMessage(message = {}) {
+  let msg = message || {};
+
+  for (let i = 0; i < 10; i++) {
+    if (msg?.ephemeralMessage?.message) {
+      msg = msg.ephemeralMessage.message;
+      continue;
+    }
+
+    if (msg?.viewOnceMessage?.message) {
+      msg = msg.viewOnceMessage.message;
+      continue;
+    }
+
+    if (msg?.viewOnceMessageV2?.message) {
+      msg = msg.viewOnceMessageV2.message;
+      continue;
+    }
+
+    if (msg?.viewOnceMessageV2Extension?.message) {
+      msg = msg.viewOnceMessageV2Extension.message;
+      continue;
+    }
+
+    break;
+  }
+
   return msg;
 }
 
-function getContextInfo(m) {
-  const root = unwrap(m?.message) || m?.message || {};
+function getQuotedContext(m) {
+  const msg = unwrapMessage(m?.message);
+  if (!msg) return null;
+
+  for (const value of Object.values(msg)) {
+    if (value?.contextInfo?.stanzaId) {
+      return value.contextInfo;
+    }
+  }
+
   return (
-    root?.extendedTextMessage?.contextInfo ||
-    root?.imageMessage?.contextInfo ||
-    root?.videoMessage?.contextInfo ||
-    root?.audioMessage?.contextInfo ||
-    Object.values(root).find((v) => v?.contextInfo)?.contextInfo ||
+    msg?.extendedTextMessage?.contextInfo ||
+    msg?.imageMessage?.contextInfo ||
+    msg?.videoMessage?.contextInfo ||
+    msg?.audioMessage?.contextInfo ||
     null
   );
 }
 
-function getQuotedMessage(m) {
-  return getContextInfo(m)?.quotedMessage || null;
-}
+function getCachedMedia(m) {
+  const context = getQuotedContext(m);
 
-function getQuotedMessageId(m) {
-  return String(getContextInfo(m)?.stanzaId || "").trim();
-}
-
-function detectQuotedMedia(m) {
-  const quoted = getQuotedMessage(m);
-  if (!quoted) return null;
-
-  const wrapped =
-    Boolean(quoted.viewOnceMessage?.message) ||
-    Boolean(quoted.viewOnceMessageV2?.message) ||
-    Boolean(quoted.viewOnceMessageV2Extension?.message);
-
-  const root = unwrap(quoted);
-  if (!root) return null;
-
-  if (root.imageMessage && (wrapped || root.imageMessage.viewOnce === true)) {
-    return { type: "image", media: root.imageMessage, caption: root.imageMessage.caption || "", mimetype: root.imageMessage.mimetype || "image/jpeg" };
+  if (!context?.stanzaId) {
+    return null;
   }
 
-  if (root.videoMessage && (wrapped || root.videoMessage.viewOnce === true)) {
-    return { type: "video", media: root.videoMessage, caption: root.videoMessage.caption || "", mimetype: root.videoMessage.mimetype || "video/mp4" };
-  }
+  const targetKey = {
+    id: context.stanzaId,
+    remoteJid: m?.key?.remoteJid || context?.remoteJid,
+    remoteJidAlt: m?.key?.remoteJidAlt,
+    participant: context?.participant,
+    participantPn: context?.participantPn,
+    participantAlt: context?.participantAlt,
+  };
 
-  if (root.audioMessage && (wrapped || root.audioMessage.viewOnce === true)) {
-    return { type: "audio", media: root.audioMessage, caption: "", mimetype: root.audioMessage.mimetype || "audio/ogg; codecs=opus", ptt: Boolean(root.audioMessage.ptt) };
-  }
-
-  return null;
+  return findCachedViewOnce(targetKey);
 }
 
 async function streamToBuffer(stream) {
   const chunks = [];
-  for await (const chunk of stream) chunks.push(Buffer.from(chunk));
+
+  for await (const chunk of stream) {
+    chunks.push(chunk);
+  }
+
   return Buffer.concat(chunks);
 }
 
-async function sendExtracted(sock, from, m, info, buffer) {
-  if (!buffer?.length) throw new Error("empty media buffer");
-
-  const caption = `> *POWERED BY BMEDIA*${info.caption ? `\n*Caption:* ${info.caption}` : ""}`;
-
-  if (info.type === "image") {
-    return sock.sendMessage(from, { image: buffer, caption, mimetype: info.mimetype || "image/jpeg" }, { quoted: m });
+async function downloadCachedMedia(cached) {
+  if (!cached?.media?.media) {
+    throw new Error("Cached view-once media metadata not found");
   }
 
-  if (info.type === "video") {
-    return sock.sendMessage(from, { video: buffer, caption, mimetype: info.mimetype || "video/mp4" }, { quoted: m });
-  }
+  const type = cached.media.type;
 
-  if (info.type === "audio") {
-    await sock.sendMessage(from, { text: "> *POWERED BY BMEDIA*" }, { quoted: m });
-    return sock.sendMessage(from, {
-      audio: buffer,
-      mimetype: info.mimetype || "audio/ogg; codecs=opus",
-      ptt: Boolean(info.ptt)
-    }, { quoted: m });
-  }
+  const stream = await downloadContentFromMessage(
+    cached.media.media,
+    type
+  );
 
-  throw new Error("unsupported media type");
+  return await streamToBuffer(stream);
 }
 
-async function handle(sock, m, from) {
-  const quotedId = getQuotedMessageId(m);
+const command = {
+  name: "vv",
+  aliases: ["vo", "viewonce"],
+  category: "TOOLS",
+  description: "Extract replied view-once media",
 
-  if (quotedId) {
-    const cached = await getCachedViewOnce(quotedId);
-    if (cached?.file) {
-      try {
-        const buffer = await fs.readFile(cached.file);
-        return await sendExtracted(sock, from, m, cached, buffer);
-      } catch (e) {
-        console.log("[vv] cached media read/send failed:", e?.message || e);
+  async execute(ctx) {
+    const { sock, m, from } = ctx;
+
+    try {
+      const cached = getCachedMedia(m);
+
+      if (!cached?.media) {
+        console.log(
+          "[vv] No cached view-once metadata found for quoted message"
+        );
+
+        return await sock.sendMessage(
+          from,
+          {
+            text:
+              "❌ View-once media was not cached.\n\n" +
+              "The bot must be online when the view-once message is received."
+          },
+          { quoted: m }
+        );
       }
+
+      console.log(`[vv] cached media found: ${cached.media.type}`);
+
+      const buffer = await downloadCachedMedia(cached);
+
+      if (!buffer?.length) {
+        throw new Error("Downloaded media buffer is empty");
+      }
+
+      const caption = cached.media.caption || "";
+
+      if (cached.media.type === "image") {
+        return await sock.sendMessage(
+          from,
+          {
+            image: buffer,
+            caption: caption
+              ? `${caption}\n\n> POWERED BY BMEDIA`
+              : "> POWERED BY BMEDIA"
+          },
+          { quoted: m }
+        );
+      }
+
+      if (cached.media.type === "video") {
+        return await sock.sendMessage(
+          from,
+          {
+            video: buffer,
+            mimetype: cached.media.mimetype || "video/mp4",
+            caption: caption
+              ? `${caption}\n\n> POWERED BY BMEDIA`
+              : "> POWERED BY BMEDIA"
+          },
+          { quoted: m }
+        );
+      }
+
+      if (cached.media.type === "audio") {
+        return await sock.sendMessage(
+          from,
+          {
+            audio: buffer,
+            mimetype: cached.media.mimetype || "audio/ogg; codecs=opus",
+            ptt: Boolean(cached.media.media?.ptt)
+          },
+          { quoted: m }
+        );
+      }
+
+      throw new Error(`Unsupported media type: ${cached.media.type}`);
+    } catch (error) {
+      console.error("[vv] extraction error:", error);
+
+      return await sock.sendMessage(
+        from,
+        {
+          text:
+            `❌ Failed to extract view-once media.\n\n` +
+            `${error?.message || error}`
+        },
+        { quoted: m }
+      );
     }
   }
-
-  const direct = detectQuotedMedia(m);
-
-  if (!direct) {
-    return sock.sendMessage(
-      from,
-      { text: "❌ Reply to a view-once image, video or voice note with .vv.\nIf the media arrived before the new cache handler was installed, it may not be recoverable." },
-      { quoted: m }
-    );
-  }
-
-  try {
-    const stream = await downloadContentFromMessage(direct.media, direct.type);
-    const buffer = await streamToBuffer(stream);
-    return await sendExtracted(sock, from, m, direct, buffer);
-  } catch (e) {
-    console.log("[vv] direct extraction failed:", e?.message || e);
-    return sock.sendMessage(
-      from,
-      { text: "❌ This view-once media was not cached when it arrived and WhatsApp no longer allows it to be downloaded.\nNew view-once media received after this fix should work with .vv." },
-      { quoted: m }
-    );
-  }
-}
-
-export default {
-  name: "viewonce",
-  aliases: ["vo", "vv"],
-  category: "TOOLS",
-  description: "Extract and resend replied view-once media.",
-  async execute(ctx) {
-    const sock = ctx?.sock || ctx?.conn || ctx?.client;
-    const m = ctx?.m;
-    const from = ctx?.from || m?.key?.remoteJid;
-    if (!sock || !m || !from) return;
-    return handle(sock, m, from);
-  },
-  async run(sock, m) {
-    return handle(sock, m, m?.key?.remoteJid);
-  }
 };
+
+export { command };
+export default command;
