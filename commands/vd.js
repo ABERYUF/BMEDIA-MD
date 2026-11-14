@@ -1,279 +1,322 @@
 // commands/vd.js (ESM)
+//
+// Owner-only: extract a replied view-once media message and send it
+// to a destination number/JID. If no destination is supplied,
+// OWNER_NUMBER from .env is used.
+//
+// Usage:
+//   .vd
+//   .vd 237679261475
+//   .vd 237679261475@s.whatsapp.net
 
-import { getContentType, downloadContentFromMessage } from "@whiskeysockets/baileys";
-
-import fs from "fs/promises";
-
-import path from "path";
-
-import { tmpdir } from "os";
-
+import { downloadContentFromMessage } from "@whiskeysockets/baileys";
 import { isOwner } from "../checks/isOwner.js";
+import { findCachedViewOnce } from "../control/viewOnceAlienReactionHandler.js";
 
 function getSender(m) {
-
   return (
-
     m?.key?.participant ||
-
     m?.participant ||
-
     m?.sender ||
-
-    m?.key?.remoteJid
-
+    m?.key?.remoteJid ||
+    ""
   );
-
 }
 
-const tagOf = (jid) => `@${String(jid || "").split("@")[0].split(":")[0]}`;
+const tagOf = (jid) =>
+  `@${String(jid || "").split("@")[0].split(":")[0]}`;
 
 function toUserJid(input) {
-
-  const n = String(input || "").split("@")[0].split(":")[0].replace(/[^\d]/g, "");
+  const n = String(input || "")
+    .split("@")[0]
+    .split(":")[0]
+    .replace(/[^\d]/g, "");
 
   if (!n) return null;
 
   return `${n}@s.whatsapp.net`;
-
-}
-
-function getOwnerDmJidFromEnv() {
-
-  const raw = String(process.env.OWNER_NUMBER || "").trim();
-
-  return toUserJid(raw);
-
-}
-
-function unwrapMessage(msg) {
-
-  if (!msg) return null;
-
-  if (msg.ephemeralMessage?.message) return unwrapMessage(msg.ephemeralMessage.message);
-
-  if (msg.viewOnceMessageV2?.message) return unwrapMessage(msg.viewOnceMessageV2.message);
-
-  if (msg.viewOnceMessageV2Extension?.message) return unwrapMessage(msg.viewOnceMessageV2Extension.message);
-
-  if (msg.viewOnceMessage?.message) return unwrapMessage(msg.viewOnceMessage.message);
-
-  return msg;
-
-}
-
-function getQuotedMessage(m) {
-
-  const msg = m?.message || {};
-
-  const contextInfo =
-
-    msg?.extendedTextMessage?.contextInfo ||
-
-    msg?.imageMessage?.contextInfo ||
-
-    msg?.videoMessage?.contextInfo ||
-
-    msg?.documentMessage?.contextInfo ||
-
-    msg?.conversation?.contextInfo ||
-
-    Object.values(msg).find((v) => v?.contextInfo)?.contextInfo;
-
-  return contextInfo?.quotedMessage || null;
-
-}
-
-async function streamToBuffer(stream) {
-
-  const chunks = [];
-
-  for await (const c of stream) chunks.push(c);
-
-  return Buffer.concat(chunks);
-
 }
 
 function normalizeDest(input) {
-
   const raw = String(input || "").trim();
-
   if (!raw) return null;
 
   return toUserJid(raw);
-
 }
 
-function detectViewOnce(m) {
+function getOwnerDmJidFromEnv() {
+  return toUserJid(process.env.OWNER_NUMBER || "");
+}
 
-  const quoted = unwrapMessage(getQuotedMessage(m));
+function unwrapMessage(message = {}) {
+  let msg = message || {};
 
-  const direct = unwrapMessage(m?.message);
-
-  const sources = [quoted, direct].filter(Boolean);
-
-  for (const root of sources) {
-
-    const type = getContentType(root);
-
-    if (type === "imageMessage" || root?.imageMessage?.viewOnce) {
-
-      const media = root.imageMessage;
-
-      if (media) return { kind: "image", media };
-
+  for (let i = 0; i < 10; i++) {
+    if (msg?.ephemeralMessage?.message) {
+      msg = msg.ephemeralMessage.message;
+      continue;
     }
 
-    if (type === "videoMessage" || root?.videoMessage?.viewOnce) {
-
-      const media = root.videoMessage;
-
-      if (media) return { kind: "video", media };
-
+    if (msg?.viewOnceMessage?.message) {
+      msg = msg.viewOnceMessage.message;
+      continue;
     }
 
-    if (type === "audioMessage" || root?.audioMessage?.viewOnce) {
-
-      const media = root.audioMessage;
-
-      if (media) {
-
-        return {
-
-          kind: "audio",
-
-          media,
-
-          ptt: Boolean(media.ptt),
-
-          mimetype: media.mimetype || "audio/ogg; codecs=opus",
-
-        };
-
-      }
-
+    if (msg?.viewOnceMessageV2?.message) {
+      msg = msg.viewOnceMessageV2.message;
+      continue;
     }
 
+    if (msg?.viewOnceMessageV2Extension?.message) {
+      msg = msg.viewOnceMessageV2Extension.message;
+      continue;
+    }
+
+    break;
   }
 
-  return null;
-
+  return msg;
 }
 
-export default {
+function getQuotedContext(m) {
+  const msg = unwrapMessage(m?.message);
 
+  if (!msg) return null;
+
+  for (const value of Object.values(msg)) {
+    if (value?.contextInfo?.stanzaId) {
+      return value.contextInfo;
+    }
+  }
+
+  return (
+    msg?.extendedTextMessage?.contextInfo ||
+    msg?.imageMessage?.contextInfo ||
+    msg?.videoMessage?.contextInfo ||
+    msg?.audioMessage?.contextInfo ||
+    msg?.documentMessage?.contextInfo ||
+    null
+  );
+}
+
+function getCachedMedia(m) {
+  const context = getQuotedContext(m);
+
+  if (!context?.stanzaId) {
+    return null;
+  }
+
+  const targetKey = {
+    id: context.stanzaId,
+
+    remoteJid:
+      m?.key?.remoteJid ||
+      context?.remoteJid,
+
+    remoteJidAlt:
+      m?.key?.remoteJidAlt,
+
+    participant:
+      context?.participant,
+
+    participantPn:
+      context?.participantPn,
+
+    participantAlt:
+      context?.participantAlt,
+  };
+
+  return findCachedViewOnce(targetKey);
+}
+
+async function streamToBuffer(stream) {
+  const chunks = [];
+
+  for await (const chunk of stream) {
+    chunks.push(chunk);
+  }
+
+  return Buffer.concat(chunks);
+}
+
+async function downloadCachedMedia(cached) {
+  if (!cached?.media?.media) {
+    throw new Error("Cached view-once media metadata not found");
+  }
+
+  const stream = await downloadContentFromMessage(
+    cached.media.media,
+    cached.media.type
+  );
+
+  return streamToBuffer(stream);
+}
+
+const command = {
   name: "vd",
 
-  aliases: ["vdowner", "v2dm"],
+  aliases: [
+    "vdowner",
+    "v2dm"
+  ],
 
   category: "OWNER",
 
-  description: "Owner-only: Extract view-once media and send to a destination JID (or OWNER_NUMBER DM).",
+  description:
+    "Owner-only: Extract replied view-once media and send it to a destination JID or OWNER_NUMBER.",
 
   async execute(ctx) {
-
-    const { sock, m, from, args = [] } = ctx;
+    const {
+      sock,
+      m,
+      from,
+      args = []
+    } = ctx;
 
     const sender = getSender(m) || from;
 
+    // OWNER ONLY
     if (!isOwner(m, sock)) {
-
       const tag = tagOf(sender);
 
       return sock.sendMessage(
-
         from,
-
-        { text: `❌ Owner only.\n\n${tag}`, mentions: [sender] },
-
-        { quoted: m }
-
+        {
+          text: `❌ Owner only.\n\n${tag}`,
+          mentions: sender ? [sender] : []
+        },
+        {
+          quoted: m
+        }
       );
-
     }
 
-    const dest = normalizeDest(args[0]) || getOwnerDmJidFromEnv();
+    // Destination:
+    // .vd <number/JID>
+    // or OWNER_NUMBER from .env
+    const dest =
+      normalizeDest(args[0]) ||
+      getOwnerDmJidFromEnv();
 
     if (!dest) {
-
       return sock.sendMessage(
-
         from,
-
-        { text: "❌ OWNER_NUMBER is missing/invalid in .env.\nSet: OWNER_NUMBER=237xxxxxxxxx" },
-
-        { quoted: m }
-
+        {
+          text:
+            "❌ OWNER_NUMBER is missing/invalid in .env.\n" +
+            "Set: OWNER_NUMBER=237xxxxxxxxx"
+        },
+        {
+          quoted: m
+        }
       );
-
-    }
-
-    const info = detectViewOnce(m);
-
-    if (!info) {
-
-      return sock.sendMessage(
-
-        from,
-
-        { text: "❌ Reply to a view-once image/video/voice-note then use: vd [jid/number]" },
-
-        { quoted: m }
-
-      );
-
     }
 
     try {
+      const cached = getCachedMedia(m);
 
-      const stream = await downloadContentFromMessage(info.media, info.kind);
-
-      const buffer = await streamToBuffer(stream);
-
-      if (info.kind === "image") {
-
-        await sock.sendMessage(dest, { image: buffer }, {});
-
-      } else if (info.kind === "video") {
-
-        const tempPath = path.join(tmpdir(), `vd_${Date.now()}.mp4`);
-
-        await fs.writeFile(tempPath, buffer);
-
-        await sock.sendMessage(dest, { video: { url: tempPath } }, {});
-
-        await fs.unlink(tempPath).catch(() => {});
-
-      } else if (info.kind === "audio") {
-
-        const ext = info.mimetype?.includes("mpeg") ? "mp3" : "ogg";
-
-        const tempPath = path.join(tmpdir(), `vd_${Date.now()}.${ext}`);
-
-        await fs.writeFile(tempPath, buffer);
-
-        await sock.sendMessage(
-
-          dest,
-
-          { audio: { url: tempPath }, mimetype: info.mimetype, ptt: Boolean(info.ptt) },
-
-          {}
-
+      if (!cached?.media) {
+        console.log(
+          "[vd] No cached view-once metadata found for quoted message"
         );
 
-        await fs.unlink(tempPath).catch(() => {});
-
+        return sock.sendMessage(
+          from,
+          {
+            text:
+              "❌ View-once media was not cached.\n\n" +
+              "The bot must be online when the view-once message is received."
+          },
+          {
+            quoted: m
+          }
+        );
       }
 
-    } catch (e) {
+      console.log(
+        `[vd] cached media found: ${cached.media.type}`
+      );
 
-      console.log("[vd] error:", e?.message || e);
+      const buffer = await downloadCachedMedia(cached);
 
-      return sock.sendMessage(from, { text: `❌ vd error: ${e?.message || e}` }, { quoted: m });
+      if (!buffer?.length) {
+        throw new Error(
+          "Downloaded media buffer is empty"
+        );
+      }
 
+      // Silent delivery to destination.
+      if (cached.media.type === "image") {
+        await sock.sendMessage(
+          dest,
+          {
+            image: buffer,
+            mimetype:
+              cached.media.mimetype ||
+              "image/jpeg"
+          }
+        );
+
+        return;
+      }
+
+      if (cached.media.type === "video") {
+        await sock.sendMessage(
+          dest,
+          {
+            video: buffer,
+            mimetype:
+              cached.media.mimetype ||
+              "video/mp4"
+          }
+        );
+
+        return;
+      }
+
+      if (cached.media.type === "audio") {
+        await sock.sendMessage(
+          dest,
+          {
+            audio: buffer,
+
+            mimetype:
+              cached.media.mimetype ||
+              "audio/ogg; codecs=opus",
+
+            ptt: Boolean(
+              cached.media.media?.ptt
+            )
+          }
+        );
+
+        return;
+      }
+
+      throw new Error(
+        `Unsupported media type: ${cached.media.type}`
+      );
+
+    } catch (error) {
+      console.error(
+        "[vd] error:",
+        error
+      );
+
+      return sock.sendMessage(
+        from,
+        {
+          text:
+            `❌ vd error: ` +
+            `${error?.message || error}`
+        },
+        {
+          quoted: m
+        }
+      );
     }
-
-  },
-
+  }
 };
+
+export { command };
+export default command;
