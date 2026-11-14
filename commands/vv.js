@@ -3,27 +3,13 @@
 import { downloadContentFromMessage } from "@whiskeysockets/baileys";
 import { findCachedViewOnce } from "../control/viewOnceAlienReactionHandler.js";
 
+
 function unwrapMessage(message = {}) {
   let msg = message || {};
 
   for (let i = 0; i < 10; i++) {
     if (msg?.ephemeralMessage?.message) {
       msg = msg.ephemeralMessage.message;
-      continue;
-    }
-
-    if (msg?.viewOnceMessage?.message) {
-      msg = msg.viewOnceMessage.message;
-      continue;
-    }
-
-    if (msg?.viewOnceMessageV2?.message) {
-      msg = msg.viewOnceMessageV2.message;
-      continue;
-    }
-
-    if (msg?.viewOnceMessageV2Extension?.message) {
-      msg = msg.viewOnceMessageV2Extension.message;
       continue;
     }
 
@@ -37,19 +23,47 @@ function getQuotedContext(m) {
   const msg = unwrapMessage(m?.message);
   if (!msg) return null;
 
-  for (const value of Object.values(msg)) {
-    if (value?.contextInfo?.stanzaId) {
-      return value.contextInfo;
-    }
-  }
-
-  return (
+  const direct =
     msg?.extendedTextMessage?.contextInfo ||
     msg?.imageMessage?.contextInfo ||
     msg?.videoMessage?.contextInfo ||
     msg?.audioMessage?.contextInfo ||
-    null
-  );
+    msg?.documentMessage?.contextInfo;
+
+  if (direct) return direct;
+
+  for (const value of Object.values(msg)) {
+    if (value?.contextInfo) return value.contextInfo;
+  }
+
+  return null;
+}
+
+function isViewOnceQuoted(m) {
+  const context = getQuotedContext(m);
+  const quoted = context?.quotedMessage;
+
+  if (!quoted) return false;
+
+  const q = unwrapMessage(quoted);
+
+  if (
+    q?.viewOnceMessage?.message ||
+    q?.viewOnceMessageV2?.message ||
+    q?.viewOnceMessageV2Extension?.message
+  ) {
+    return true;
+  }
+
+  if (
+    q?.imageMessage?.viewOnce ||
+    q?.videoMessage?.viewOnce ||
+    q?.audioMessage?.viewOnce
+  ) {
+    return true;
+  }
+
+  return false;
 }
 
 function getCachedMedia(m) {
@@ -59,16 +73,14 @@ function getCachedMedia(m) {
     return null;
   }
 
-  const targetKey = {
+  return findCachedViewOnce({
     id: context.stanzaId,
     remoteJid: m?.key?.remoteJid || context?.remoteJid,
     remoteJidAlt: m?.key?.remoteJidAlt,
     participant: context?.participant,
     participantPn: context?.participantPn,
     participantAlt: context?.participantAlt,
-  };
-
-  return findCachedViewOnce(targetKey);
+  });
 }
 
 async function streamToBuffer(stream) {
@@ -82,19 +94,18 @@ async function streamToBuffer(stream) {
 }
 
 async function downloadCachedMedia(cached) {
-  if (!cached?.media?.media) {
-    throw new Error("Cached view-once media metadata not found");
+  if (!cached?.media?.media || !cached?.media?.type) {
+    return null;
   }
-
-  const type = cached.media.type;
 
   const stream = await downloadContentFromMessage(
     cached.media.media,
-    type
+    cached.media.type
   );
 
-  return await streamToBuffer(stream);
+  return streamToBuffer(stream);
 }
+
 
 const command = {
   name: "vv",
@@ -105,88 +116,93 @@ const command = {
   async execute(ctx) {
     const { sock, m, from } = ctx;
 
+    // 1. Command was not used on a view-once message.
+    if (!isViewOnceQuoted(m)) {
+      return sock.sendMessage(
+        from,
+        { text: "❌ Reply to a view once" },
+        { quoted: m }
+      );
+    }
+
+    // 2. It is view-once, but we do not have usable cached media.
+    const cached = getCachedMedia(m);
+
+    if (!cached?.media?.media || !cached?.media?.type) {
+      return sock.sendMessage(
+        from,
+        { text: "❌ No media" },
+        { quoted: m }
+      );
+    }
+
     try {
-      const cached = getCachedMedia(m);
-
-      if (!cached?.media) {
-        console.log(
-          "[vv] No cached view-once metadata found for quoted message"
-        );
-
-        return await sock.sendMessage(
-          from,
-          {
-            text:
-              "❌ Reply to a view-once media.\n\n" +
-              "If this was a view-once message but no media was found, try a newer message."
-          },
-          { quoted: m }
-        );
-      }
-
-      console.log(`[vv] cached media found: ${cached.media.type}`);
-
       const buffer = await downloadCachedMedia(cached);
 
       if (!buffer?.length) {
-        throw new Error("View-once detected, but no media could be retrieved");
+        return sock.sendMessage(
+          from,
+          { text: "❌ No media" },
+          { quoted: m }
+        );
       }
 
       const caption = cached.media.caption || "";
 
       if (cached.media.type === "image") {
-        return await sock.sendMessage(
+        return sock.sendMessage(
           from,
           {
             image: buffer,
             caption: caption
               ? `${caption}\n\n> POWERED BY BMEDIA`
-              : "> POWERED BY BMEDIA"
+              : "> POWERED BY BMEDIA",
           },
           { quoted: m }
         );
       }
 
       if (cached.media.type === "video") {
-        return await sock.sendMessage(
+        return sock.sendMessage(
           from,
           {
             video: buffer,
             mimetype: cached.media.mimetype || "video/mp4",
             caption: caption
               ? `${caption}\n\n> POWERED BY BMEDIA`
-              : "> POWERED BY BMEDIA"
+              : "> POWERED BY BMEDIA",
           },
           { quoted: m }
         );
       }
 
       if (cached.media.type === "audio") {
-        return await sock.sendMessage(
+        return sock.sendMessage(
           from,
           {
             audio: buffer,
             mimetype: cached.media.mimetype || "audio/ogg; codecs=opus",
-            ptt: Boolean(cached.media.media?.ptt)
+            ptt: Boolean(cached.media.media?.ptt),
           },
           { quoted: m }
         );
       }
 
-      throw new Error(`Unsupported media type: ${cached.media.type}`);
-    } catch (error) {
-      console.error("[vv] extraction error:", error);
-
-      return await sock.sendMessage(
+      return sock.sendMessage(
         from,
-        {
-          text:
-            "❌ Could not get media.\n\nReport to HQ."
-        },
+        { text: "❌ No media" },
+        { quoted: m }
+      );
+    } catch (error) {
+      console.error("[vv] error:", error);
+
+      return sock.sendMessage(
+        from,
+        { text: "❌ Could not get media, report to HQ" },
         { quoted: m }
       );
     }
-  }
+  },
 };
 
 export { command };
