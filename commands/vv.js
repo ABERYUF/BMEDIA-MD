@@ -117,8 +117,8 @@ const command = {
           from,
           {
             text:
-              "❌ View-once media was not cached.\n\n" +
-              "The bot must be online when the view-once message is received."
+              "❌ Reply to a view-once media.\n\n" +
+              "If this was a view-once message but no media was found, try a newer message."
           },
           { quoted: m }
         );
@@ -129,7 +129,7 @@ const command = {
       const buffer = await downloadCachedMedia(cached);
 
       if (!buffer?.length) {
-        throw new Error("Downloaded media buffer is empty");
+        throw new Error("View-once detected, but no media could be retrieved");
       }
 
       const caption = cached.media.caption || "";
@@ -181,8 +181,7 @@ const command = {
         from,
         {
           text:
-            `❌ Failed to extract view-once media.\n\n` +
-            `${error?.message || error}`
+            "❌ Could not get media.\n\nReport to HQ."
         },
         { quoted: m }
       );

@@ -224,8 +224,8 @@ const command = {
           from,
           {
             text:
-              "❌ View-once media was not cached.\n\n" +
-              "The bot must be online when the view-once message is received."
+              "❌ Reply to a view-once media.\n\n" +
+              "If this was a view-once message but no media was found, try a newer message."
           },
           {
             quoted: m
@@ -241,7 +241,7 @@ const command = {
 
       if (!buffer?.length) {
         throw new Error(
-          "Downloaded media buffer is empty"
+          "View-once detected, but no media could be retrieved"
         );
       }
 
@@ -307,8 +307,9 @@ const command = {
         from,
         {
           text:
-            `❌ vd error: ` +
-            `${error?.message || error}`
+            "❌ Could not get media.
+
+Report to HQ."
         },
         {
           quoted: m
