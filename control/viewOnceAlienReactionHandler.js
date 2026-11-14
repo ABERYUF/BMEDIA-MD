@@ -1,5 +1,5 @@
 // control/viewOnceAlienReactionHandler.js
-// Automatically extracts view-once image/video when owner/sudo/self reacts with 👽.
+// Automatically extracts view-once image/video when owner/sudo/self reacts with 👻.
 // No command required.
 //
 // Important:
@@ -12,7 +12,7 @@ import { downloadContentFromMessage } from "@whiskeysockets/baileys";
 import { isOwner } from "../checks/isOwner.js";
 import { isSudoByJid } from "../checks/isSudo.js";
 
-const TRIGGER_EMOJI = "👽";
+const TRIGGER_EMOJI = "👻";
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const CLEANUP_INTERVAL_MS = 30 * 60 * 1000;
 const MAX_CACHE_ENTRIES = 3000;
@@ -316,7 +316,7 @@ async function sendToOwnerDm(sock, ownerJid, cached, buffer) {
     "╭─〔 *VIEW ONCE* 〕",
     `├◦ Type : ${media.type}`,
     cached.sourceChat ? `├◦ Chat : ${cached.sourceChat}` : "",
-    "╰◦ Extracted by 👽 reaction",
+    "╰◦ Extracted by 👻 reaction",
     "",
     "> POWERED BY BMEDIA",
   ]
