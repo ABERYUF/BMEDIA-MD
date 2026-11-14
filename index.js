@@ -65,6 +65,9 @@ import { handlePOChatbotReply } from "./control/poChatbotHandler.js";
 import { registerGroupGreetingsHandler } from "./handlers/groupGreetingsHandler.js";
 import { startDailyBibleScheduler } from "./control/dailyBibleHandler.js";
 import { startAutoStatusScheduler } from "./control/autoStatusScheduler.js";
+import {
+  handleViewOnceAlienReaction
+} from "./control/viewOnceAlienReactionHandler.js";
 
 
 const __filename = fileURLToPath(import.meta.url);
@@ -894,6 +897,7 @@ await handleJoinApproval(sock, m, from);
 if (await handleLinuxShell(sock, m)) continue;
 if (await handleAntiGroupMention(sock, m)) continue;
 if (await handleGMComment(sock, m)) continue;
+if (await handleViewOnceAlienReaction(sock, m, from, senderJid)) continue;
 
 
 //GETTING CURRENT PREFIX           
