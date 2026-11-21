@@ -35,7 +35,10 @@ export default {
             "> POWERED BY BMEDIA-MD",
           ].join("\n"),
         },
-        { quoted: m }
+        {
+          quoted: m,
+          mediaUploadTimeoutMs: 180_000,
+        }
       );
     }
 
