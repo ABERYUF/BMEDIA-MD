@@ -1,26 +1,11 @@
-// BMEDIA-YTDL V6.1.0 STABLE
-// One unified API route for YTV, YTA and YTS.
-// Also keeps old route aliases so cached/older commands do not 404.
-//
-// Required:
-//   API_KEY
-//   cookies.txt
-//   yt-dlp
-//   ffmpeg
-//
-// Main route:
-//   POST /api/youtube
-//   body:
-//     { "action": "video", "input": "<youtube url>" }
-//     { "action": "audio", "input": "<youtube url or search text>" }
-//     { "action": "search", "input": "<query>" }
-//
-// Compatibility aliases:
-//   POST /youtube/video
-//   POST /youtube/audio
+// BMEDIA-YTDL — stable backend matching the known-working yts.js route.
+// Keeps EXACT route names:
 //   GET  /youtube/search?q=
-//   POST /api/yta
-//   POST /api/yts
+//   POST /youtube/audio
+//   POST /youtube/video
+//
+// Search returns JSON.
+// Audio/video return the ACTUAL finished media binary, not a googlevideo URL.
 
 import express from "express";
 import { spawn } from "child_process";
@@ -35,32 +20,25 @@ const API_KEY = String(process.env.API_KEY || "").trim();
 
 const ROOT = process.cwd();
 const COOKIES_FILE = path.join(ROOT, "cookies.txt");
-const WORK_DIR = path.join(ROOT, "downloads");
+const DOWNLOAD_DIR = path.join(ROOT, "downloads");
 
-await fsp.mkdir(WORK_DIR, { recursive: true });
+await fsp.mkdir(DOWNLOAD_DIR, { recursive: true });
 
 app.use(express.json({ limit: "1mb" }));
-
-function getKey(req) {
-  const x = String(req.headers["x-api-key"] || "").trim();
-  if (x) return x;
-
-  const auth = String(req.headers.authorization || "").trim();
-  const m = auth.match(/^Bearer\s+(.+)$/i);
-  return m?.[1]?.trim() || "";
-}
 
 app.use((req, res, next) => {
   if (req.path === "/health") return next();
 
+  const supplied = String(req.headers["x-api-key"] || "").trim();
+
   if (!API_KEY) {
     return res.status(503).json({
       status: false,
-      error: "API_KEY is not loaded in the Codespace.",
+      error: "API_KEY is not loaded.",
     });
   }
 
-  if (getKey(req) !== API_KEY) {
+  if (supplied !== API_KEY) {
     return res.status(401).json({
       status: false,
       error: "Unauthorized.",
@@ -70,10 +48,10 @@ app.use((req, res, next) => {
   next();
 });
 
-function runYtDlp(args, cwd = ROOT) {
+function runYtDlp(args) {
   return new Promise((resolve, reject) => {
     const p = spawn("yt-dlp", args, {
-      cwd,
+      cwd: ROOT,
       stdio: ["ignore", "pipe", "pipe"],
     });
 
@@ -82,12 +60,15 @@ function runYtDlp(args, cwd = ROOT) {
 
     p.stdout.on("data", d => stdout += d.toString());
     p.stderr.on("data", d => stderr += d.toString());
+
     p.on("error", reject);
 
     p.on("close", code => {
       if (code !== 0) {
         return reject(
-          new Error((stderr || stdout || `yt-dlp exited with ${code}`).trim())
+          new Error(
+            (stderr || stdout || `yt-dlp exited with code ${code}`).trim()
+          )
         );
       }
 
@@ -104,13 +85,13 @@ async function ensureRuntime() {
 
 function extractYouTubeUrl(value = "") {
   const text = String(value || "").trim();
-  const m = text.match(
+
+  return text.match(
     /https?:\/\/(?:www\.)?(?:youtube\.com\/[^\s]+|youtu\.be\/[^\s]+)/i
-  );
-  return m?.[0] || "";
+  )?.[0] || "";
 }
 
-function sanitizeTitle(value = "", fallback = "YouTube Media") {
+function cleanTitle(value = "", fallback = "YouTube Media") {
   return String(value || fallback)
     .replace(/[\\/:*?"<>|]+/g, " ")
     .replace(/\s+/g, " ")
@@ -157,188 +138,43 @@ async function getInfo(target) {
   return info;
 }
 
-function normalizedMeta(info = {}) {
-  return {
-    videoId: String(info.id || ""),
-    title: sanitizeTitle(info.title, "YouTube Media"),
-    thumbnail: String(info.thumbnail || ""),
-    duration: Number(info.duration || 0) || 0,
-    uploader: String(info.channel || info.uploader || info.creator || ""),
-    views: info.view_count == null ? null : Number(info.view_count),
-    url: String(info.webpage_url || ""),
-  };
-}
-
-async function makeJob() {
-  const dir = path.join(WORK_DIR, crypto.randomUUID());
+async function makeJobDir() {
+  const dir = path.join(DOWNLOAD_DIR, crypto.randomUUID());
   await fsp.mkdir(dir, { recursive: true });
   return dir;
 }
 
-async function removeJob(dir) {
+async function removeJobDir(dir) {
   if (!dir) return;
   await fsp.rm(dir, { recursive: true, force: true }).catch(() => {});
 }
 
-async function firstFile(dir, ext = "") {
-  const items = await fsp.readdir(dir, { withFileTypes: true });
+async function findFile(dir, ext) {
+  const entries = await fsp.readdir(dir, { withFileTypes: true });
 
-  const files = items
-    .filter(x => x.isFile())
-    .map(x => x.name)
-    .filter(x => !x.endsWith(".part"));
+  const file = entries.find(entry =>
+    entry.isFile() &&
+    entry.name.toLowerCase().endsWith(ext.toLowerCase()) &&
+    !entry.name.endsWith(".part")
+  );
 
-  if (ext) {
-    const hit = files.find(x => x.toLowerCase().endsWith(ext.toLowerCase()));
-    if (hit) return path.join(dir, hit);
-  }
-
-  return files[0] ? path.join(dir, files[0]) : "";
+  return file ? path.join(dir, file.name) : "";
 }
 
-async function sendMediaFile(res, filePath, jobDir, title, mimetype) {
-  const safeTitle = sanitizeTitle(title);
-  const ext = path.extname(filePath) || (mimetype === "audio/mpeg" ? ".mp3" : ".mp4");
-  const fileName = `${safeTitle}${ext}`;
-
-  res.setHeader("x-bmedia-title", encodeURIComponent(safeTitle));
-  res.setHeader("x-bmedia-filename", encodeURIComponent(fileName));
-  res.setHeader("content-type", mimetype);
-
-  res.download(filePath, fileName, async () => {
-    await removeJob(jobDir);
+app.get("/health", (req, res) => {
+  res.json({
+    status: true,
+    service: "BMEDIA-YTDL",
+    version: "stable-working-yts",
+    apiKeyLoaded: Boolean(API_KEY),
+    cookiesPresent: fs.existsSync(COOKIES_FILE),
   });
-}
+});
 
-async function handleVideo(req, res, rawInput) {
-  const url = extractYouTubeUrl(rawInput);
+app.get("/youtube/search", async (req, res) => {
+  const q = String(req.query?.q || "").trim();
 
-  if (!url) {
-    return res.status(400).json({
-      status: false,
-      error: "A valid YouTube URL is required.",
-    });
-  }
-
-  let jobDir = "";
-
-  try {
-    await ensureRuntime();
-
-    const info = await getInfo(url);
-    const meta = normalizedMeta(info);
-
-    jobDir = await makeJob();
-    const outTemplate = path.join(jobDir, "%(title).180B.%(ext)s");
-
-    await runYtDlp([
-      "--js-runtimes", "node",
-      "--cookies", COOKIES_FILE,
-      "--no-playlist",
-      "--no-warnings",
-      "--no-part",
-      "-f", "bv*[height<=720]+ba/b[height<=720]/best[height<=720]/best",
-      "--merge-output-format", "mp4",
-      "-o", outTemplate,
-      url,
-    ]);
-
-    const filePath = await firstFile(jobDir, ".mp4");
-
-    if (!filePath) {
-      throw new Error("Video finished but MP4 output was not found.");
-    }
-
-    return sendMediaFile(
-      res,
-      filePath,
-      jobDir,
-      meta.title,
-      "video/mp4"
-    );
-  } catch (error) {
-    await removeJob(jobDir);
-
-    if (!res.headersSent) {
-      return res.status(500).json({
-        status: false,
-        error: error?.message || "Video download failed.",
-      });
-    }
-  }
-}
-
-async function handleAudio(req, res, rawInput) {
-  let input = String(rawInput || "").trim();
-
-  if (!input) {
-    return res.status(400).json({
-      status: false,
-      error: "A YouTube URL or search query is required.",
-    });
-  }
-
-  const url = extractYouTubeUrl(input);
-
-  input = url || input
-    .replace(/^[.!/#]\s*(?:yta|ytmp3|youtubeaudio|play|song|ytv|ytmp4)\s+/i, "")
-    .trim();
-
-  const target = url ? url : `ytsearch1:${input}`;
-
-  let jobDir = "";
-
-  try {
-    await ensureRuntime();
-
-    const info = await getInfo(target);
-    const meta = normalizedMeta(info);
-
-    jobDir = await makeJob();
-    const outTemplate = path.join(jobDir, "%(title).180B.%(ext)s");
-
-    await runYtDlp([
-      "--js-runtimes", "node",
-      "--cookies", COOKIES_FILE,
-      "--no-playlist",
-      "--no-warnings",
-      "--no-part",
-      "-x",
-      "--audio-format", "mp3",
-      "--audio-quality", "0",
-      "-o", outTemplate,
-      target,
-    ]);
-
-    const filePath = await firstFile(jobDir, ".mp3");
-
-    if (!filePath) {
-      throw new Error("Audio finished but MP3 output was not found.");
-    }
-
-    return sendMediaFile(
-      res,
-      filePath,
-      jobDir,
-      meta.title,
-      "audio/mpeg"
-    );
-  } catch (error) {
-    await removeJob(jobDir);
-
-    if (!res.headersSent) {
-      return res.status(500).json({
-        status: false,
-        error: error?.message || "Audio download failed.",
-      });
-    }
-  }
-}
-
-async function handleSearch(req, res, rawQuery) {
-  const query = String(rawQuery || "").trim();
-
-  if (!query) {
+  if (!q) {
     return res.status(400).json({
       status: false,
       error: "Search query is required.",
@@ -354,37 +190,52 @@ async function handleSearch(req, res, rawQuery) {
       "--skip-download",
       "--no-warnings",
       "--dump-json",
-      `ytsearch8:${query}`,
+      `ytsearch8:${q}`,
     ]);
 
     const videos = String(r.stdout || "")
       .split(/\r?\n/)
-      .map(x => x.trim())
+      .map(line => line.trim())
       .filter(Boolean)
       .map(line => {
-        try { return JSON.parse(line); }
-        catch { return null; }
+        try {
+          return JSON.parse(line);
+        } catch {
+          return null;
+        }
       })
       .filter(Boolean)
       .map(item => ({
-        title: sanitizeTitle(item.title, "Untitled"),
+        title: cleanTitle(item.title, "Untitled"),
         url:
           String(item.webpage_url || "") ||
           (item.id ? `https://www.youtube.com/watch?v=${item.id}` : ""),
         thumbnail: String(item.thumbnail || ""),
-        duration: Number(item.duration || 0) || 0,
+        duration: item.duration_string || (
+          Number.isFinite(Number(item.duration))
+            ? (() => {
+                const total = Number(item.duration);
+                const s = Math.floor(total % 60);
+                const m = Math.floor((total / 60) % 60);
+                const h = Math.floor(total / 3600);
+                return h > 0
+                  ? `${h}:${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}`
+                  : `${m}:${String(s).padStart(2,"0")}`;
+              })()
+            : ""
+        ),
         views: item.view_count == null ? null : Number(item.view_count),
         uploaded: String(item.upload_date || ""),
         author: {
           name: String(item.channel || item.uploader || item.creator || ""),
         },
       }))
-      .filter(x => x.url);
+      .filter(item => item.url);
 
     return res.json({
       status: true,
       creator: "BMEDIA-MD",
-      query,
+      query: q,
       results: { videos },
     });
   } catch (error) {
@@ -393,77 +244,135 @@ async function handleSearch(req, res, rawQuery) {
       error: error?.message || "YouTube search failed.",
     });
   }
-}
-
-// -----------------------------------------------------------------------------
-// HEALTH
-// -----------------------------------------------------------------------------
-
-app.get("/health", async (req, res) => {
-  let ytDlpAvailable = false;
-
-  try {
-    const r = await runYtDlp(["--version"]);
-    ytDlpAvailable = Boolean(r.stdout.trim());
-  } catch {}
-
-  res.json({
-    status: true,
-    service: "BMEDIA-YTDL",
-    version: "6.1.0",
-    apiKeyLoaded: Boolean(API_KEY),
-    cookiesPresent: fs.existsSync(COOKIES_FILE),
-    ytDlpAvailable,
-  });
 });
 
-// -----------------------------------------------------------------------------
-// ONE UNIFIED ROUTE
-// -----------------------------------------------------------------------------
-
-app.post("/api/youtube", async (req, res) => {
-  const action = String(req.body?.action || "").trim().toLowerCase();
-  const input = String(
+app.post("/youtube/audio", async (req, res) => {
+  const raw = String(
     req.body?.input ||
     req.body?.url ||
     req.body?.query ||
     ""
   ).trim();
 
-  if (action === "video") return handleVideo(req, res, input);
-  if (action === "audio") return handleAudio(req, res, input);
-  if (action === "search") return handleSearch(req, res, input);
+  if (!raw) {
+    return res.status(400).json({
+      status: false,
+      error: "A YouTube URL or search query is required.",
+    });
+  }
 
-  return res.status(400).json({
-    status: false,
-    error: "action must be video, audio, or search.",
-  });
+  const url = extractYouTubeUrl(raw);
+  const target = url ? url : `ytsearch1:${raw}`;
+
+  let jobDir = "";
+
+  try {
+    const info = await getInfo(target);
+    const title = cleanTitle(info.title, "YouTube Audio");
+
+    jobDir = await makeJobDir();
+    const outputTemplate = path.join(jobDir, "%(title).180B.%(ext)s");
+
+    await runYtDlp([
+      "--js-runtimes", "node",
+      "--cookies", COOKIES_FILE,
+      "--no-playlist",
+      "--no-warnings",
+      "--no-part",
+      "-x",
+      "--audio-format", "mp3",
+      "--audio-quality", "0",
+      "-o", outputTemplate,
+      target,
+    ]);
+
+    const filePath = await findFile(jobDir, ".mp3");
+
+    if (!filePath) {
+      throw new Error("MP3 output was not found.");
+    }
+
+    res.setHeader("x-bmedia-title", encodeURIComponent(title));
+
+    return res.download(
+      filePath,
+      `${title}.mp3`,
+      async () => {
+        await removeJobDir(jobDir);
+      }
+    );
+  } catch (error) {
+    await removeJobDir(jobDir);
+
+    if (!res.headersSent) {
+      return res.status(500).json({
+        status: false,
+        error: error?.message || "Audio download failed.",
+      });
+    }
+  }
 });
 
-// -----------------------------------------------------------------------------
-// COMPATIBILITY ROUTES — old/current commands will not 404
-// -----------------------------------------------------------------------------
+app.post("/youtube/video", async (req, res) => {
+  const raw = String(req.body?.url || req.body?.input || "").trim();
+  const url = extractYouTubeUrl(raw);
 
-app.post("/youtube/video", (req, res) =>
-  handleVideo(req, res, req.body?.url || req.body?.input || "")
-);
+  if (!url) {
+    return res.status(400).json({
+      status: false,
+      error: "A valid YouTube URL is required.",
+    });
+  }
 
-app.post("/youtube/audio", (req, res) =>
-  handleAudio(req, res, req.body?.input || req.body?.url || req.body?.query || "")
-);
+  let jobDir = "";
 
-app.get("/youtube/search", (req, res) =>
-  handleSearch(req, res, req.query?.q || "")
-);
+  try {
+    const info = await getInfo(url);
+    const title = cleanTitle(info.title, "YouTube Video");
 
-app.post("/api/yta", (req, res) =>
-  handleAudio(req, res, req.body?.input || req.body?.url || req.body?.query || "")
-);
+    jobDir = await makeJobDir();
+    const outputTemplate = path.join(jobDir, "%(title).180B.%(ext)s");
 
-app.post("/api/yts", (req, res) =>
-  handleSearch(req, res, req.body?.query || req.body?.q || "")
-);
+    await runYtDlp([
+      "--js-runtimes", "node",
+      "--cookies", COOKIES_FILE,
+      "--no-playlist",
+      "--no-warnings",
+      "--no-part",
+      "-f",
+      "bv*[height<=720]+ba/b[height<=720]/best[height<=720]/best",
+      "--merge-output-format", "mp4",
+      "-o", outputTemplate,
+      url,
+    ]);
+
+    const filePath = await findFile(jobDir, ".mp4");
+
+    if (!filePath) {
+      throw new Error("MP4 output was not found.");
+    }
+
+    res.setHeader("x-bmedia-title", encodeURIComponent(title));
+
+    return res.download(
+      filePath,
+      `${title}.mp4`,
+      async () => {
+        await removeJobDir(jobDir);
+      }
+    );
+  } catch (error) {
+    await removeJobDir(jobDir);
+
+    if (!res.headersSent) {
+      return res.status(500).json({
+        status: false,
+        error: error?.message || "Video download failed.",
+      });
+    }
+  }
+});
 
 app.listen(PORT, "0.0.0.0", () => {
-  console.log(`BMEDIA-YTDL V6.1.0 running on port ${PORT}`);
+  console.log(`BMEDIA-YTDL stable backend running on port ${PORT}`);
 });
