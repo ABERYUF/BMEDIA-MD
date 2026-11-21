@@ -1,6 +1,5 @@
-// commands/ytv.js (ESM)
-// BMEDIA-MD — YouTube video using private BMEDIA-YTDL.
-// Built to match the same simple env/auth style as the working yts.js.
+// commands/ytv.js — BMEDIA-MD V6.2.0
+// YTS is NOT touched.
 
 import fs from "fs";
 import path from "path";
@@ -12,7 +11,30 @@ async function safeFetch(url, opts) {
   return mod.default(url, opts);
 }
 
-function apiConfig() {
+function toNodeStream(body) {
+  if (!body) return null;
+  if (typeof body.pipe === "function") return body;
+  if (typeof Readable.fromWeb === "function") return Readable.fromWeb(body);
+  return null;
+}
+
+function pickUrl(args = []) {
+  const text = args.join(" ").trim();
+
+  return text.match(
+    /https?:\/\/(?:www\.)?(?:youtube\.com\/[^\s]+|youtu\.be\/[^\s]+)/i
+  )?.[0] || "";
+}
+
+function cleanName(value = "") {
+  return String(value || "YouTube Video")
+    .replace(/[\\/:*?"<>|]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 120);
+}
+
+function config() {
   const baseUrl = String(process.env.YTDL_API_URL || "")
     .trim()
     .replace(/\/+$/, "");
@@ -25,41 +47,8 @@ function apiConfig() {
   return { baseUrl, apiKey };
 }
 
-function pickUrl(args = []) {
-  const q = args.join(" ").trim();
-
-  const url = q.match(
-    /https?:\/\/(?:www\.)?(?:youtube\.com\/[^\s]+|youtu\.be\/[^\s]+)/i
-  );
-
-  return url?.[0] || "";
-}
-
-function cleanName(value = "") {
-  return String(value || "YouTube Video")
-    .replace(/[\\/:*?"<>|]/g, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 120);
-}
-
-function decodeHeader(value = "") {
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return "";
-  }
-}
-
-function toNodeStream(body) {
-  if (!body) return null;
-  if (typeof body.pipe === "function") return body;
-  if (typeof Readable.fromWeb === "function") return Readable.fromWeb(body);
-  return null;
-}
-
-async function downloadVideo(url, filePath) {
-  const { baseUrl, apiKey } = apiConfig();
+async function getVideo(url) {
+  const { baseUrl, apiKey } = config();
 
   const response = await safeFetch(`${baseUrl}/youtube/video`, {
     method: "POST",
@@ -70,54 +59,71 @@ async function downloadVideo(url, filePath) {
     body: JSON.stringify({ url }),
   });
 
+  const text = await response.text();
+  let data = null;
+
+  try { data = JSON.parse(text); } catch {}
+
   if (!response.ok) {
-    let reason = `API error: HTTP ${response.status}`;
-
-    try {
-      const data = await response.json();
-      reason = data?.error || data?.message || reason;
-    } catch {}
-
-    throw new Error(reason);
+    throw new Error(data?.error || `API error: HTTP ${response.status}`);
   }
 
-  const title =
-    decodeHeader(response.headers.get("x-bmedia-title") || "") ||
-    "YouTube Video";
+  if (!data?.status || !data?.mediaUrl) {
+    throw new Error(data?.error || "Video was not prepared.");
+  }
 
-  const body = toNodeStream(response.body);
-  if (!body) throw new Error("No video returned by BMEDIA-YTDL.");
+  return data;
+}
+
+async function downloadMedia(url, filePath) {
+  const response = await safeFetch(url, {
+    method: "GET",
+    redirect: "follow",
+    headers: {
+      "user-agent": "Mozilla/5.0",
+      accept: "video/mp4,video/*;q=0.9,*/*;q=0.8",
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Video media download failed: HTTP ${response.status}`);
+  }
+
+  const stream = toNodeStream(response.body);
+  if (!stream) throw new Error("Video media response had no body.");
 
   const ws = fs.createWriteStream(filePath);
   let bytes = 0;
 
   await new Promise((resolve, reject) => {
-    body.on("data", chunk => {
+    stream.on("data", chunk => {
       bytes += chunk?.length || 0;
     });
 
-    body.on("error", reject);
+    stream.on("error", reject);
     ws.on("error", reject);
     ws.on("finish", resolve);
-    body.pipe(ws);
+    stream.pipe(ws);
   });
 
-  if (bytes < 5000) {
+  const stat = fs.statSync(filePath);
+
+  if (!stat.size || stat.size < 5000 || bytes < 5000) {
     throw new Error("Downloaded video is invalid.");
   }
 
-  return { title: cleanName(title) };
+  return stat.size;
 }
 
-function runDownload(ctx, url) {
+function start(ctx, url) {
   const { sock, m, from } = ctx;
 
   setTimeout(async () => {
-    const tempDir = path.join(process.cwd(), "download_temp");
-    fs.mkdirSync(tempDir, { recursive: true });
+    const dir = path.join(process.cwd(), "download_temp");
+    fs.mkdirSync(dir, { recursive: true });
 
     const filePath = path.join(
-      tempDir,
+      dir,
       `${Date.now()}_${Math.random().toString(16).slice(2)}.mp4`
     );
 
@@ -126,14 +132,17 @@ function runDownload(ctx, url) {
         react: { text: "⏳", key: m.key },
       }).catch(() => {});
 
-      const result = await downloadVideo(url, filePath);
+      const data = await getVideo(url);
+      await downloadMedia(data.mediaUrl, filePath);
+
+      const title = cleanName(data.title);
 
       await sock.sendMessage(
         from,
         {
           video: { url: filePath },
           mimetype: "video/mp4",
-          caption: result.title,
+          caption: title,
         },
         { quoted: m }
       );
@@ -152,9 +161,7 @@ function runDownload(ctx, url) {
         { quoted: m }
       ).catch(() => {});
     } finally {
-      try {
-        fs.rmSync(filePath, { force: true });
-      } catch {}
+      try { fs.rmSync(filePath, { force: true }); } catch {}
     }
   }, 250);
 }
@@ -177,7 +184,7 @@ export default {
       );
     }
 
-    runDownload(ctx, url);
+    start(ctx, url);
     return true;
   },
 };

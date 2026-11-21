@@ -1,6 +1,5 @@
-// commands/yta.js (ESM)
-// BMEDIA-MD — YouTube audio using private BMEDIA-YTDL.
-// Built to match the same simple env/auth style as the working yts.js.
+// commands/yta.js — BMEDIA-MD V6.2.0
+// YTS is NOT touched.
 
 import fs from "fs";
 import path from "path";
@@ -12,7 +11,32 @@ async function safeFetch(url, opts) {
   return mod.default(url, opts);
 }
 
-function apiConfig() {
+function toNodeStream(body) {
+  if (!body) return null;
+  if (typeof body.pipe === "function") return body;
+  if (typeof Readable.fromWeb === "function") return Readable.fromWeb(body);
+  return null;
+}
+
+function cleanName(value = "") {
+  return String(value || "YouTube Audio")
+    .replace(/[\\/:*?"<>|]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 120);
+}
+
+function pickInput(args = []) {
+  const text = args.join(" ").trim();
+
+  const url = text.match(
+    /https?:\/\/(?:www\.)?(?:youtube\.com\/[^\s]+|youtu\.be\/[^\s]+)/i
+  );
+
+  return url?.[0] || text;
+}
+
+function config() {
   const baseUrl = String(process.env.YTDL_API_URL || "")
     .trim()
     .replace(/\/+$/, "");
@@ -25,41 +49,8 @@ function apiConfig() {
   return { baseUrl, apiKey };
 }
 
-function pickInput(args = []) {
-  const q = args.join(" ").trim();
-
-  const url = q.match(
-    /https?:\/\/(?:www\.)?(?:youtube\.com\/[^\s]+|youtu\.be\/[^\s]+)/i
-  );
-
-  return url?.[0] || q;
-}
-
-function cleanName(value = "") {
-  return String(value || "YouTube Audio")
-    .replace(/[\\/:*?"<>|]/g, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 120);
-}
-
-function decodeHeader(value = "") {
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return "";
-  }
-}
-
-function toNodeStream(body) {
-  if (!body) return null;
-  if (typeof body.pipe === "function") return body;
-  if (typeof Readable.fromWeb === "function") return Readable.fromWeb(body);
-  return null;
-}
-
-async function downloadAudio(input, filePath) {
-  const { baseUrl, apiKey } = apiConfig();
+async function getAudio(input) {
+  const { baseUrl, apiKey } = config();
 
   const response = await safeFetch(`${baseUrl}/youtube/audio`, {
     method: "POST",
@@ -70,51 +61,71 @@ async function downloadAudio(input, filePath) {
     body: JSON.stringify({ input }),
   });
 
+  const text = await response.text();
+  let data = null;
+
+  try { data = JSON.parse(text); } catch {}
+
   if (!response.ok) {
-    let reason = `API error: HTTP ${response.status}`;
-
-    try {
-      const data = await response.json();
-      reason = data?.error || data?.message || reason;
-    } catch {}
-
-    throw new Error(reason);
+    throw new Error(data?.error || `API error: HTTP ${response.status}`);
   }
 
-  const title =
-    decodeHeader(response.headers.get("x-bmedia-title") || "") ||
-    "YouTube Audio";
+  if (!data?.status || !data?.mediaUrl) {
+    throw new Error(data?.error || "Audio was not prepared.");
+  }
 
-  const body = toNodeStream(response.body);
-  if (!body) throw new Error("No audio returned by BMEDIA-YTDL.");
+  return data;
+}
+
+async function downloadMedia(url, filePath) {
+  const response = await safeFetch(url, {
+    method: "GET",
+    redirect: "follow",
+    headers: {
+      "user-agent": "Mozilla/5.0",
+      accept: "audio/mpeg,audio/*;q=0.9,*/*;q=0.8",
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Audio media download failed: HTTP ${response.status}`);
+  }
+
+  const stream = toNodeStream(response.body);
+  if (!stream) throw new Error("Audio media response had no body.");
 
   const ws = fs.createWriteStream(filePath);
+  let bytes = 0;
 
   await new Promise((resolve, reject) => {
-    body.on("error", reject);
+    stream.on("data", chunk => {
+      bytes += chunk?.length || 0;
+    });
+
+    stream.on("error", reject);
     ws.on("error", reject);
     ws.on("finish", resolve);
-    body.pipe(ws);
+    stream.pipe(ws);
   });
 
   const stat = fs.statSync(filePath);
 
-  if (!stat.size) {
-    throw new Error("Downloaded audio is empty.");
+  if (!stat.size || stat.size < 1000 || bytes < 1000) {
+    throw new Error("Downloaded audio file is empty.");
   }
 
-  return { title: cleanName(title) };
+  return stat.size;
 }
 
-function runDownload(ctx, input) {
+function start(ctx, input) {
   const { sock, m, from } = ctx;
 
   setTimeout(async () => {
-    const tempDir = path.join(process.cwd(), "temp");
-    fs.mkdirSync(tempDir, { recursive: true });
+    const dir = path.join(process.cwd(), "temp");
+    fs.mkdirSync(dir, { recursive: true });
 
     const filePath = path.join(
-      tempDir,
+      dir,
       `${Date.now()}_${Math.random().toString(16).slice(2)}.mp3`
     );
 
@@ -123,7 +134,10 @@ function runDownload(ctx, input) {
         react: { text: "⏳", key: m.key },
       }).catch(() => {});
 
-      const result = await downloadAudio(input, filePath);
+      const data = await getAudio(input);
+      await downloadMedia(data.mediaUrl, filePath);
+
+      const title = cleanName(data.title);
 
       await sock.sendMessage(
         from,
@@ -131,7 +145,7 @@ function runDownload(ctx, input) {
           audio: { url: filePath },
           mimetype: "audio/mpeg",
           ptt: false,
-          fileName: `${result.title}.mp3`,
+          fileName: `${title}.mp3`,
         },
         { quoted: m }
       );
@@ -150,9 +164,7 @@ function runDownload(ctx, input) {
         { quoted: m }
       ).catch(() => {});
     } finally {
-      try {
-        fs.rmSync(filePath, { force: true });
-      } catch {}
+      try { fs.rmSync(filePath, { force: true }); } catch {}
     }
   }, 250);
 }
@@ -175,7 +187,7 @@ export default {
       );
     }
 
-    runDownload(ctx, input);
+    start(ctx, input);
     return true;
   },
 };
