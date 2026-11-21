@@ -6,7 +6,7 @@
 
 const DEFAULT_API = "https://bmedia-ytdl.onrender.com";
 const SEARCH_TTL_MS = Number(process.env.YT_SEARCH_TTL_MS || 180000);
-const API_TIMEOUT_MS = Number(process.env.YT_API_TIMEOUT_MS || 20000);
+const API_TIMEOUT_MS = Number(process.env.YT_API_TIMEOUT_MS || 180000);
 
 const searchCache = new Map();
 
