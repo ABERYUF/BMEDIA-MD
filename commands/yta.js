@@ -1,6 +1,6 @@
-// commands/yta.js (ESM)
-// BMEDIA-MD — YouTube audio using private BMEDIA-YTDL.
-// Same command-object format as the old BMEDIA-MD commands.
+// commands/yta.js
+// BMEDIA-MD V6 — YouTube audio via private BMEDIA-YTDL V6 API.
+// Keeps the old BMEDIA-MD command object format.
 
 import fs from "fs";
 import path from "path";
@@ -12,36 +12,6 @@ async function safeFetch(url, opts) {
   return mod.default(url, opts);
 }
 
-function pickInput(args) {
-  const s = (args || []).join(" ").trim();
-
-  const url = s.match(
-    /https?:\/\/(?:www\.)?(?:youtube\.com\/[^\s]+|youtu\.be\/[^\s]+)/i
-  );
-
-  // If a YouTube link exists anywhere in the arguments, send only that link.
-  if (url?.[0]) return url[0];
-
-  // Also tolerate accidental ".yta query" / ".ytv link" text in args.
-  return s
-    .replace(/^[.!/#]\s*(?:yta|ytv|ytmp3|ytmp4|yts|ytsearch)\s+/i, "")
-    .trim();
-}
-
-function ensureTempDir() {
-  const dir = path.join(process.cwd(), "temp");
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  return dir;
-}
-
-function cleanFileName(name) {
-  return String(name || "YouTube Audio")
-    .replace(/[\\/:*?"<>|]/g, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 100);
-}
-
 function responseBodyToNodeReadable(body) {
   if (!body) return null;
   if (typeof body.pipe === "function") return body;
@@ -49,28 +19,29 @@ function responseBodyToNodeReadable(body) {
   return null;
 }
 
-function getHeaderTitle(response) {
-  const encoded = String(response.headers.get("x-bmedia-title") || "");
-
-  if (!encoded) return "";
-
-  try {
-    return decodeURIComponent(encoded);
-  } catch {
-    return "";
-  }
+function cleanFileName(name) {
+  return String(name || "YouTube Audio")
+    .replace(/[\\/:*?"<>|]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 120);
 }
 
-async function readApiError(response) {
-  try {
-    const data = await response.json();
-    return data?.error || data?.details || `API error: HTTP ${response.status}`;
-  } catch {
-    return `API error: HTTP ${response.status}`;
-  }
+function normalizeInput(args = []) {
+  const input = args.join(" ").trim();
+
+  const match = input.match(
+    /https?:\/\/(?:www\.)?(?:youtube\.com\/[^\s]+|youtu\.be\/[^\s]+)/i
+  );
+
+  if (match?.[0]) return match[0];
+
+  return input
+    .replace(/^[.!/#]\s*(?:yta|ytmp3|youtubeaudio|play|song)\s+/i, "")
+    .trim();
 }
 
-async function downloadAudio(input, outPath) {
+function apiConfig() {
   const baseUrl = String(process.env.YTDL_API_URL || "")
     .trim()
     .replace(/\/+$/, "");
@@ -79,6 +50,36 @@ async function downloadAudio(input, outPath) {
 
   if (!baseUrl) throw new Error("YTDL_API_URL is missing in .env");
   if (!apiKey) throw new Error("YTDL_API_KEY is missing in .env");
+
+  return { baseUrl, apiKey };
+}
+
+async function readApiResponse(response) {
+  const text = await response.text();
+
+  let data = null;
+
+  try {
+    data = JSON.parse(text);
+  } catch {}
+
+  if (!response.ok) {
+    throw new Error(
+      data?.error ||
+      data?.message ||
+      `API error: HTTP ${response.status}`
+    );
+  }
+
+  if (!data || data.status !== true) {
+    throw new Error(data?.error || "Invalid BMEDIA-YTDL response.");
+  }
+
+  return data;
+}
+
+async function getAudioInfo(input) {
+  const { baseUrl, apiKey } = apiConfig();
 
   const response = await safeFetch(`${baseUrl}/youtube/audio`, {
     method: "POST",
@@ -89,14 +90,27 @@ async function downloadAudio(input, outPath) {
     body: JSON.stringify({ input }),
   });
 
+  return readApiResponse(response);
+}
+
+async function downloadToFile(url, filePath) {
+  const response = await safeFetch(url, {
+    method: "GET",
+    redirect: "follow",
+    headers: {
+      "user-agent": "Mozilla/5.0",
+      accept: "audio/*,*/*;q=0.8",
+    },
+  });
+
   if (!response.ok) {
-    throw new Error(await readApiError(response));
+    throw new Error(`Audio file download failed: HTTP ${response.status}`);
   }
 
   const stream = responseBodyToNodeReadable(response.body);
-  if (!stream) throw new Error("No audio returned by BMEDIA-YTDL.");
+  if (!stream) throw new Error("Audio response had no body.");
 
-  const ws = fs.createWriteStream(outPath);
+  const ws = fs.createWriteStream(filePath);
 
   await new Promise((resolve, reject) => {
     stream.on("error", reject);
@@ -105,42 +119,56 @@ async function downloadAudio(input, outPath) {
     stream.pipe(ws);
   });
 
-  const stat = fs.existsSync(outPath) ? fs.statSync(outPath) : null;
-  if (!stat?.size) throw new Error("Downloaded audio is empty.");
+  const stat = fs.existsSync(filePath) ? fs.statSync(filePath) : null;
 
-  return {
-    title: cleanFileName(getHeaderTitle(response) || "YouTube Audio"),
-  };
+  if (!stat?.size) {
+    throw new Error("Downloaded audio file is empty.");
+  }
 }
 
 function runDownload(ctx, input) {
   const { sock, m, from } = ctx;
 
   setTimeout(async () => {
-    const tempDir = ensureTempDir();
+    const tempDir = path.join(process.cwd(), "temp");
+
+    if (!fs.existsSync(tempDir)) {
+      fs.mkdirSync(tempDir, { recursive: true });
+    }
+
     const id = `${Date.now()}_${Math.random().toString(16).slice(2)}`;
-    const mp3Path = path.join(tempDir, `${id}.mp3`);
+    let tempPath = "";
 
     await sock.sendMessage(from, {
       react: { text: "⏳", key: m.key },
     }).catch(() => {});
 
     try {
-      await sock.sendMessage(
-        from,
-        { text: "⏳ Processing... please wait." },
-        { quoted: m }
-      );
+      const data = await getAudioInfo(input);
 
-      const result = await downloadAudio(input, mp3Path);
+      const title = cleanFileName(data.title || "YouTube Audio");
+      const ext =
+        String(data.audio?.ext || data.fileName || "")
+          .toLowerCase()
+          .includes("m4a")
+          ? "m4a"
+          : "mp3";
+
+      const mimetype =
+        String(data.mimetype || "").trim() ||
+        (ext === "m4a" ? "audio/mp4" : "audio/mpeg");
+
+      tempPath = path.join(tempDir, `${id}.${ext}`);
+
+      await downloadToFile(data.downloadUrl || data.url, tempPath);
 
       await sock.sendMessage(
         from,
         {
-          audio: { url: mp3Path },
-          mimetype: "audio/mpeg",
+          audio: { url: tempPath },
+          mimetype,
           ptt: false,
-          fileName: `${result.title}.mp3`,
+          fileName: `${title}.${ext}`,
         },
         { quoted: m }
       );
@@ -148,20 +176,26 @@ function runDownload(ctx, input) {
       await sock.sendMessage(from, {
         react: { text: "✅", key: m.key },
       }).catch(() => {});
-    } catch (e) {
+    } catch (error) {
       await sock.sendMessage(from, {
         react: { text: "❌", key: m.key },
       }).catch(() => {});
 
       await sock.sendMessage(
         from,
-        { text: `❌ download unsuccessful\nReason: ${e?.message || e}` },
+        {
+          text:
+            `❌ download unsuccessful\n` +
+            `Reason: ${error?.message || error}`,
+        },
         { quoted: m }
       ).catch(() => {});
     } finally {
-      try {
-        if (fs.existsSync(mp3Path)) fs.unlinkSync(mp3Path);
-      } catch {}
+      if (tempPath) {
+        try {
+          fs.rmSync(tempPath, { force: true });
+        } catch {}
+      }
     }
   }, 250);
 }
@@ -171,15 +205,24 @@ export default {
   aliases: ["ytmp3", "youtubeaudio", "play", "song"],
   category: "DOWNLOAD",
   description: "Search for or download YouTube audio.",
+  usage: "yta <YouTube link or song title>",
 
   async execute(ctx) {
-    const { sock, m, from, args, prefix } = ctx;
-    const input = pickInput(args);
+    const { sock, m, from, args = [], prefix = "." } = ctx;
+    const input = normalizeInput(args);
 
     if (!input) {
       return sock.sendMessage(
         from,
-        { text: `Usage: ${prefix}yta <youtube link or song title>` },
+        {
+          text: [
+            "╭─〔 *YOUTUBE AUDIO* 〕",
+            `├◦ ${prefix}yta <song title>`,
+            `╰◦ ${prefix}yta <YouTube link>`,
+            "",
+            "> POWERED BY BMEDIA-MD",
+          ].join("\n"),
+        },
         { quoted: m }
       );
     }

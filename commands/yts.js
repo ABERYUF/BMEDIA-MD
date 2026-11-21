@@ -1,6 +1,6 @@
 // commands/yts.js (ESM)
-// BMEDIA-MD — YouTube search using private BMEDIA-YTDL.
-// Preserves the old yts/ytsearch output style.
+// BMEDIA-MD V6 — YouTube search using private BMEDIA-YTDL V6 API.
+// Preserves the old yts/ytsearch format.
 
 async function safeFetch(url, opts) {
   if (globalThis.fetch) return fetch(url, opts);
@@ -19,6 +19,53 @@ function fmtViews(n) {
   return String(num);
 }
 
+function formatUploadDate(value = "") {
+  const v = String(value || "").trim();
+
+  if (/^\d{8}$/.test(v)) {
+    return `${v.slice(0, 4)}-${v.slice(4, 6)}-${v.slice(6, 8)}`;
+  }
+
+  return v;
+}
+
+function apiConfig() {
+  const baseUrl = String(process.env.YTDL_API_URL || "")
+    .trim()
+    .replace(/\/+$/, "");
+
+  const apiKey = String(process.env.YTDL_API_KEY || "").trim();
+
+  if (!baseUrl) throw new Error("YTDL_API_URL is missing in .env");
+  if (!apiKey) throw new Error("YTDL_API_KEY is missing in .env");
+
+  return { baseUrl, apiKey };
+}
+
+async function readApiResponse(response) {
+  const text = await response.text();
+
+  let data = null;
+
+  try {
+    data = JSON.parse(text);
+  } catch {}
+
+  if (!response.ok) {
+    throw new Error(
+      data?.error ||
+      data?.message ||
+      `API error: HTTP ${response.status}`
+    );
+  }
+
+  if (!data || data.status !== true) {
+    throw new Error(data?.error || "Invalid BMEDIA-YTDL response.");
+  }
+
+  return data;
+}
+
 export default {
   name: "yts",
   aliases: ["ytsearch"],
@@ -26,8 +73,8 @@ export default {
   description: "Search YouTube videos (title, thumbnail, url, info).",
 
   async execute(ctx) {
-    const { sock, m, from, args, prefix } = ctx;
-    const q = (args || []).join(" ").trim();
+    const { sock, m, from, args = [], prefix = "." } = ctx;
+    const q = args.join(" ").trim();
 
     if (!q) {
       return sock.sendMessage(
@@ -41,30 +88,10 @@ export default {
       );
     }
 
-    const baseUrl = String(process.env.YTDL_API_URL || "")
-      .trim()
-      .replace(/\/+$/, "");
-
-    const apiKey = String(process.env.YTDL_API_KEY || "").trim();
-
-    if (!baseUrl) {
-      return sock.sendMessage(
-        from,
-        { text: "❌ Failed: YTDL_API_URL is missing in .env" },
-        { quoted: m }
-      );
-    }
-
-    if (!apiKey) {
-      return sock.sendMessage(
-        from,
-        { text: "❌ Failed: YTDL_API_KEY is missing in .env" },
-        { quoted: m }
-      );
-    }
-
     try {
-      const res = await safeFetch(
+      const { baseUrl, apiKey } = apiConfig();
+
+      const response = await safeFetch(
         `${baseUrl}/youtube/search?q=${encodeURIComponent(q)}`,
         {
           method: "GET",
@@ -75,23 +102,7 @@ export default {
         }
       );
 
-      if (!res.ok) {
-        let reason = `API error: HTTP ${res.status}`;
-
-        try {
-          const body = await res.json();
-          reason = body?.error || body?.details || reason;
-        } catch {}
-
-        throw new Error(reason);
-      }
-
-      const data = await res.json().catch(() => null);
-
-      if (!data || data.success !== true) {
-        throw new Error(data?.error || "Invalid API response");
-      }
-
+      const data = await readApiResponse(response);
       const videos = data?.results?.videos || [];
 
       if (!videos.length) {
@@ -114,7 +125,7 @@ export default {
 
         if (v.duration) lines.push(`• Duration: ${v.duration}`);
         if (v.views != null) lines.push(`• Views: ${fmtViews(v.views)}`);
-        if (v.uploaded) lines.push(`• Uploaded: ${v.uploaded}`);
+        if (v.uploaded) lines.push(`• Uploaded: ${formatUploadDate(v.uploaded)}`);
         if (v.author?.name) lines.push(`• Author: ${v.author.name}`);
         if (v.url) lines.push(`• Link: ${v.url}`);
         if (v.thumbnail) lines.push(`• Thumb: ${v.thumbnail}`);
@@ -145,10 +156,10 @@ export default {
       }
 
       return true;
-    } catch (e) {
+    } catch (error) {
       return sock.sendMessage(
         from,
-        { text: `❌ Failed: ${e?.message || e}` },
+        { text: `❌ Failed: ${error?.message || error}` },
         { quoted: m }
       );
     }
