@@ -16,7 +16,7 @@ import {
 
 export default {
   name: "yta",
-  aliases: ["ytmp3", "youtubeaudio", "play", "song"],
+  aliases: ["ytmp3", "youtubeaudio", "song"],
   category: "DOWNLOAD",
   description: "Download YouTube audio quickly.",
   usage: "yta <YouTube link or title>",
