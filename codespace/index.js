@@ -1,14 +1,15 @@
-// BMEDIA-YTDL Codespaces backend
+// index.js — BMEDIA-YTDL Codespaces backend
 // Node.js ESM
 //
-// Codespaces secrets:
+// Required Codespaces secrets:
 //   API_KEY
-//   YT_COOKIES_B64  (restored to cookies.txt by devcontainer)
+//   YT_COOKIES_B64 -> restored to cookies.txt by your devcontainer setup
 //
 // Endpoints:
 //   GET  /health
-//   POST /youtube/video   { "url": "https://youtube..." }
-//   POST /youtube/audio   { "input": "YouTube URL OR search text" }
+//   GET  /youtube/search?q=...
+//   POST /youtube/video { url }
+//   POST /youtube/audio { input/url/query }
 
 import express from "express";
 import { spawn } from "child_process";
@@ -29,35 +30,36 @@ fs.mkdirSync(DOWNLOAD_DIR, { recursive: true });
 
 app.use(express.json({ limit: "1mb" }));
 
+function suppliedApiKey(req) {
+  const direct = String(req.headers["x-api-key"] || "").trim();
+  if (direct) return direct;
+
+  const auth = String(req.headers.authorization || "").trim();
+  const m = auth.match(/^Bearer\s+(.+)$/i);
+  return m?.[1]?.trim() || "";
+}
+
 app.use((req, res, next) => {
   if (req.path === "/health") return next();
 
-  const suppliedKey = String(req.headers["x-api-key"] || "").trim();
+  if (!API_KEY) {
+    return res.status(503).json({
+      ok: false,
+      error: "BMEDIA-YTDL API_KEY is not loaded. Restart the Codespace after loading the secret.",
+    });
+  }
 
-  if (!API_KEY || suppliedKey !== API_KEY) {
+  const supplied = suppliedApiKey(req);
+
+  if (!supplied || supplied !== API_KEY) {
     return res.status(401).json({
       ok: false,
-      error: "Unauthorized.",
+      error: "Unauthorized: YTDL_API_KEY does not match the Codespace API_KEY.",
     });
   }
 
   next();
 });
-
-function isYouTubeUrl(value = "") {
-  try {
-    const u = new URL(String(value || "").trim());
-    const host = u.hostname.replace(/^www\./, "").toLowerCase();
-
-    return (
-      host === "youtube.com" ||
-      host.endsWith(".youtube.com") ||
-      host === "youtu.be"
-    );
-  } catch {
-    return false;
-  }
-}
 
 function runYtDlp(args) {
   return new Promise((resolve, reject) => {
@@ -99,10 +101,45 @@ async function ensureRuntime() {
   } catch {
     throw new Error("cookies.txt is missing on the BMEDIA-YTDL server.");
   }
+}
 
-  if (!API_KEY) {
-    throw new Error("API_KEY is not configured on the BMEDIA-YTDL server.");
+function extractYouTubeUrl(value = "") {
+  const text = String(value || "").trim();
+  const m = text.match(
+    /https?:\/\/(?:www\.)?(?:youtube\.com\/[^\s]+|youtu\.be\/[^\s]+)/i
+  );
+  return m?.[0] || "";
+}
+
+function isYouTubeUrl(value = "") {
+  const found = extractYouTubeUrl(value);
+  if (!found) return false;
+
+  try {
+    const u = new URL(found);
+    const host = u.hostname.replace(/^www\./, "").toLowerCase();
+
+    return (
+      host === "youtube.com" ||
+      host.endsWith(".youtube.com") ||
+      host === "youtu.be"
+    );
+  } catch {
+    return false;
   }
+}
+
+function normalizeAudioTarget(value = "") {
+  const input = String(value || "").trim();
+  const url = extractYouTubeUrl(input);
+
+  if (url) return url;
+
+  // Strip a mistakenly included bot command prefix such as ".yta " or ".ytv "
+  // before treating the remaining text as a YouTube search query.
+  const cleaned = input.replace(/^[.!/#]\s*(?:yta|ytv|ytmp3|ytmp4|yts|ytsearch)\s+/i, "").trim();
+
+  return cleaned ? `ytsearch1:${cleaned}` : "";
 }
 
 async function makeJobDir() {
@@ -116,8 +153,9 @@ async function removeJobDir(dir) {
   await fsp.rm(dir, { recursive: true, force: true }).catch(() => {});
 }
 
-async function findOutputFile(dir) {
+async function findOutputFile(dir, preferredExt = "") {
   const entries = await fsp.readdir(dir, { withFileTypes: true });
+
   const files = entries
     .filter((entry) => entry.isFile())
     .map((entry) => entry.name)
@@ -125,40 +163,169 @@ async function findOutputFile(dir) {
 
   if (!files.length) return null;
 
-  // Prefer final mp4/mp3 outputs.
-  const preferred =
-    files.find((name) => /\.mp4$/i.test(name)) ||
-    files.find((name) => /\.mp3$/i.test(name)) ||
-    files[0];
+  if (preferredExt) {
+    const preferred = files.find((name) =>
+      name.toLowerCase().endsWith(preferredExt.toLowerCase())
+    );
 
-  return path.join(dir, preferred);
+    if (preferred) return path.join(dir, preferred);
+  }
+
+  return path.join(dir, files[0]);
 }
 
-function safeDownloadName(filePath, fallback) {
-  const name = path.basename(filePath || "").trim();
-  return name || fallback;
+function safeHeaderTitle(filePath, fallback = "YouTube Media") {
+  const base = path.basename(filePath || "");
+  const ext = path.extname(base);
+  const title = path.basename(base, ext).trim();
+  return title || fallback;
 }
 
-async function sendFileAndCleanup(res, filePath, jobDir, fallbackName) {
-  const fileName = safeDownloadName(filePath, fallbackName);
+async function sendFileAndCleanup(res, filePath, jobDir, fallbackName, fallbackTitle) {
+  const fileName = path.basename(filePath || "").trim() || fallbackName;
+  const title = safeHeaderTitle(filePath, fallbackTitle);
 
-  // res.download streams the file instead of loading it into RAM.
+  res.setHeader("x-bmedia-title", encodeURIComponent(title));
+
   return res.download(filePath, fileName, async () => {
     await removeJobDir(jobDir);
   });
+}
+
+function formatDuration(seconds) {
+  const total = Number(seconds || 0);
+  if (!Number.isFinite(total) || total <= 0) return "";
+
+  const s = Math.floor(total % 60);
+  const m = Math.floor((total / 60) % 60);
+  const h = Math.floor(total / 3600);
+
+  if (h > 0) {
+    return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  }
+
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+
+function formatUploadDate(value = "") {
+  const v = String(value || "").trim();
+
+  if (/^\d{8}$/.test(v)) {
+    return `${v.slice(0, 4)}-${v.slice(4, 6)}-${v.slice(6, 8)}`;
+  }
+
+  return v;
+}
+
+function pickThumbnail(item = {}) {
+  if (item.thumbnail) return item.thumbnail;
+
+  const thumbnails = Array.isArray(item.thumbnails)
+    ? item.thumbnails
+    : [];
+
+  return thumbnails.at(-1)?.url || thumbnails[0]?.url || "";
+}
+
+function normalizeSearchItem(item = {}) {
+  const id = String(item.id || "").trim();
+
+  const url =
+    String(item.webpage_url || "").trim() ||
+    (id ? `https://www.youtube.com/watch?v=${id}` : "");
+
+  const author = String(
+    item.channel ||
+    item.uploader ||
+    item.creator ||
+    ""
+  ).trim();
+
+  return {
+    title: String(item.title || "Untitled"),
+    url,
+    thumbnail: pickThumbnail(item),
+    duration:
+      String(item.duration_string || "").trim() ||
+      formatDuration(item.duration),
+    views:
+      item.view_count == null
+        ? null
+        : Number(item.view_count),
+    uploaded: formatUploadDate(item.upload_date),
+    author: {
+      name: author,
+    },
+  };
 }
 
 app.get("/health", (req, res) => {
   res.json({
     ok: true,
     service: "BMEDIA-YTDL",
+    apiKeyLoaded: Boolean(API_KEY),
+    cookiesPresent: fs.existsSync(COOKIES_FILE),
   });
 });
 
-app.post("/youtube/video", async (req, res) => {
-  const url = String(req.body?.url || "").trim();
+app.get("/youtube/search", async (req, res) => {
+  const q = String(req.query?.q || "").trim();
 
-  if (!isYouTubeUrl(url)) {
+  if (!q) {
+    return res.status(400).json({
+      success: false,
+      error: "Search query is required.",
+    });
+  }
+
+  try {
+    await ensureRuntime();
+
+    const result = await runYtDlp([
+      "--js-runtimes",
+      "node",
+      "--cookies",
+      COOKIES_FILE,
+      "--skip-download",
+      "--dump-json",
+      "--no-warnings",
+      `ytsearch8:${q}`,
+    ]);
+
+    const videos = String(result.stdout || "")
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => {
+        try {
+          return JSON.parse(line);
+        } catch {
+          return null;
+        }
+      })
+      .filter(Boolean)
+      .map(normalizeSearchItem)
+      .filter((item) => item.url);
+
+    return res.json({
+      success: true,
+      results: { videos },
+    });
+  } catch (error) {
+    console.error("[SEARCH]", error?.message || error);
+
+    return res.status(500).json({
+      success: false,
+      error: error?.message || "YouTube search failed.",
+    });
+  }
+});
+
+app.post("/youtube/video", async (req, res) => {
+  const raw = String(req.body?.url || req.body?.input || "").trim();
+  const url = extractYouTubeUrl(raw);
+
+  if (!url || !isYouTubeUrl(url)) {
     return res.status(400).json({
       ok: false,
       error: "A valid YouTube URL is required.",
@@ -192,7 +359,7 @@ app.post("/youtube/video", async (req, res) => {
       url,
     ]);
 
-    const filePath = await findOutputFile(jobDir);
+    const filePath = await findOutputFile(jobDir, ".mp4");
 
     if (!filePath) {
       throw new Error("Download completed but the video output was not found.");
@@ -202,7 +369,8 @@ app.post("/youtube/video", async (req, res) => {
       res,
       filePath,
       jobDir,
-      "YouTube Video.mp4"
+      "YouTube Video.mp4",
+      "YouTube Video"
     );
   } catch (error) {
     await removeJobDir(jobDir);
@@ -221,21 +389,19 @@ app.post("/youtube/video", async (req, res) => {
 app.post("/youtube/audio", async (req, res) => {
   const input = String(
     req.body?.input ||
-      req.body?.url ||
-      req.body?.query ||
-      ""
+    req.body?.url ||
+    req.body?.query ||
+    ""
   ).trim();
 
-  if (!input) {
+  const target = normalizeAudioTarget(input);
+
+  if (!target) {
     return res.status(400).json({
       ok: false,
       error: "A YouTube URL or search query is required.",
     });
   }
-
-  const target = isYouTubeUrl(input)
-    ? input
-    : `ytsearch1:${input}`;
 
   let jobDir = "";
 
@@ -265,17 +431,18 @@ app.post("/youtube/audio", async (req, res) => {
       target,
     ]);
 
-    const filePath = await findOutputFile(jobDir);
+    const filePath = await findOutputFile(jobDir, ".mp3");
 
     if (!filePath) {
-      throw new Error("Audio conversion completed but the output was not found.");
+      throw new Error("Audio conversion completed but the MP3 output was not found.");
     }
 
     return sendFileAndCleanup(
       res,
       filePath,
       jobDir,
-      "YouTube Audio.mp3"
+      "YouTube Audio.mp3",
+      "YouTube Audio"
     );
   } catch (error) {
     await removeJobDir(jobDir);

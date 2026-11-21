@@ -1,126 +1,169 @@
-// commands/yta.js
-// Uses private BMEDIA-YTDL backend and temp-file sending.
-// Required on the MAIN bot host:
-//   YTDL_API_URL=https://YOUR-CODESPACE-3000.app.github.dev
-//   YTDL_API_KEY=your_private_api_key
-//
-// Designed to work with the ORIGINAL index.js by running the long job in
-// a detached async task, so execute() returns quickly and avoids the global
-// 15-second command timeout.
+// commands/yta.js (ESM)
+// BMEDIA-MD — YouTube audio using private BMEDIA-YTDL.
+// Same command-object format as the old BMEDIA-MD commands.
 
 import fs from "fs";
 import path from "path";
-import os from "os";
 import { Readable } from "stream";
-import { pipeline } from "stream/promises";
 
-const REQUEST_TIMEOUT_MS = 30 * 60 * 1000;
-
-function apiConfig() {
-  const baseUrl = String(process.env.YTDL_API_URL || "").trim().replace(/\/+$/, "");
-  const apiKey = String(process.env.YTDL_API_KEY || "").trim();
-
-  if (!baseUrl) throw new Error("YTDL_API_URL is not configured.");
-  if (!apiKey) throw new Error("YTDL_API_KEY is not configured.");
-
-  return { baseUrl, apiKey };
+async function safeFetch(url, opts) {
+  if (globalThis.fetch) return fetch(url, opts);
+  const mod = await import("node-fetch");
+  return mod.default(url, opts);
 }
 
-function filenameFromDisposition(value = "") {
-  const raw = String(value || "");
-  const utf8 = raw.match(/filename\*=UTF-8''([^;]+)/i);
-  if (utf8?.[1]) {
-    try {
-      return decodeURIComponent(utf8[1]);
-    } catch {}
-  }
+function pickInput(args) {
+  const s = (args || []).join(" ").trim();
 
-  const normal = raw.match(/filename="?([^";]+)"?/i);
-  return normal?.[1] || "";
-}
+  const url = s.match(
+    /https?:\/\/(?:www\.)?(?:youtube\.com\/[^\s]+|youtu\.be\/[^\s]+)/i
+  );
 
-function safeBaseName(name = "", fallback = "YouTube Audio") {
-  const base = String(name || "")
-    .replace(/\.[^.]+$/, "")
-    .replace(/[\/:*?"<>|]+/g, " ")
-    .replace(/\s+/g, " ")
+  // If a YouTube link exists anywhere in the arguments, send only that link.
+  if (url?.[0]) return url[0];
+
+  // Also tolerate accidental ".yta query" / ".ytv link" text in args.
+  return s
+    .replace(/^[.!/#]\s*(?:yta|ytv|ytmp3|ytmp4|yts|ytsearch)\s+/i, "")
     .trim();
-
-  return base || fallback;
 }
 
-function buildCaption(title) {
-  return [
-    "╭─〔 *YOUTUBE AUDIO* 〕",
-    `╰◦ *Title:* ${title || "YouTube Audio"}`,
-    "",
-    "> POWERED BY BMEDIA-MD",
-  ].join("
-");
+function ensureTempDir() {
+  const dir = path.join(process.cwd(), "temp");
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+function cleanFileName(name) {
+  return String(name || "YouTube Audio")
+    .replace(/[\\/:*?"<>|]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 100);
+}
+
+function responseBodyToNodeReadable(body) {
+  if (!body) return null;
+  if (typeof body.pipe === "function") return body;
+  if (typeof Readable.fromWeb === "function") return Readable.fromWeb(body);
+  return null;
+}
+
+function getHeaderTitle(response) {
+  const encoded = String(response.headers.get("x-bmedia-title") || "");
+
+  if (!encoded) return "";
+
+  try {
+    return decodeURIComponent(encoded);
+  } catch {
+    return "";
+  }
 }
 
 async function readApiError(response) {
   try {
     const data = await response.json();
-    return data?.error || data?.details || `BMEDIA-YTDL returned HTTP ${response.status}.`;
+    return data?.error || data?.details || `API error: HTTP ${response.status}`;
   } catch {
+    return `API error: HTTP ${response.status}`;
+  }
+}
+
+async function downloadAudio(input, outPath) {
+  const baseUrl = String(process.env.YTDL_API_URL || "")
+    .trim()
+    .replace(/\/+$/, "");
+
+  const apiKey = String(process.env.YTDL_API_KEY || "").trim();
+
+  if (!baseUrl) throw new Error("YTDL_API_URL is missing in .env");
+  if (!apiKey) throw new Error("YTDL_API_KEY is missing in .env");
+
+  const response = await safeFetch(`${baseUrl}/youtube/audio`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-api-key": apiKey,
+    },
+    body: JSON.stringify({ input }),
+  });
+
+  if (!response.ok) {
+    throw new Error(await readApiError(response));
+  }
+
+  const stream = responseBodyToNodeReadable(response.body);
+  if (!stream) throw new Error("No audio returned by BMEDIA-YTDL.");
+
+  const ws = fs.createWriteStream(outPath);
+
+  await new Promise((resolve, reject) => {
+    stream.on("error", reject);
+    ws.on("error", reject);
+    ws.on("finish", resolve);
+    stream.pipe(ws);
+  });
+
+  const stat = fs.existsSync(outPath) ? fs.statSync(outPath) : null;
+  if (!stat?.size) throw new Error("Downloaded audio is empty.");
+
+  return {
+    title: cleanFileName(getHeaderTitle(response) || "YouTube Audio"),
+  };
+}
+
+function runDownload(ctx, input) {
+  const { sock, m, from } = ctx;
+
+  setTimeout(async () => {
+    const tempDir = ensureTempDir();
+    const id = `${Date.now()}_${Math.random().toString(16).slice(2)}`;
+    const mp3Path = path.join(tempDir, `${id}.mp3`);
+
+    await sock.sendMessage(from, {
+      react: { text: "⏳", key: m.key },
+    }).catch(() => {});
+
     try {
-      const text = await response.text();
-      return text || `BMEDIA-YTDL returned HTTP ${response.status}.`;
-    } catch {
-      return `BMEDIA-YTDL returned HTTP ${response.status}.`;
+      await sock.sendMessage(
+        from,
+        { text: "⏳ Processing... please wait." },
+        { quoted: m }
+      );
+
+      const result = await downloadAudio(input, mp3Path);
+
+      await sock.sendMessage(
+        from,
+        {
+          audio: { url: mp3Path },
+          mimetype: "audio/mpeg",
+          ptt: false,
+          fileName: `${result.title}.mp3`,
+        },
+        { quoted: m }
+      );
+
+      await sock.sendMessage(from, {
+        react: { text: "✅", key: m.key },
+      }).catch(() => {});
+    } catch (e) {
+      await sock.sendMessage(from, {
+        react: { text: "❌", key: m.key },
+      }).catch(() => {});
+
+      await sock.sendMessage(
+        from,
+        { text: `❌ download unsuccessful\nReason: ${e?.message || e}` },
+        { quoted: m }
+      ).catch(() => {});
+    } finally {
+      try {
+        if (fs.existsSync(mp3Path)) fs.unlinkSync(mp3Path);
+      } catch {}
     }
-  }
-}
-
-async function requestAudioToTemp(input) {
-  const { baseUrl, apiKey } = apiConfig();
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-
-  const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "bmedia-yta-"));
-
-  try {
-    const response = await fetch(`${baseUrl}/youtube/audio`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-api-key": apiKey,
-      },
-      body: JSON.stringify({ input }),
-      signal: controller.signal,
-    });
-
-    if (!response.ok) {
-      throw new Error(await readApiError(response));
-    }
-
-    if (!response.body) {
-      throw new Error("BMEDIA-YTDL returned no audio stream.");
-    }
-
-    const fileName = filenameFromDisposition(response.headers.get("content-disposition")) || "YouTube Audio.mp3";
-    const finalPath = path.join(tempDir, fileName);
-
-    await pipeline(Readable.fromWeb(response.body), fs.createWriteStream(finalPath));
-
-    return {
-      tempDir,
-      filePath: finalPath,
-      fileName,
-      title: safeBaseName(fileName),
-    };
-  } catch (error) {
-    await fs.promises.rm(tempDir, { recursive: true, force: true }).catch(() => {});
-    throw error;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-async function cleanupTemp(tempDir) {
-  if (!tempDir) return;
-  await fs.promises.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+  }, 250);
 }
 
 export default {
@@ -128,77 +171,20 @@ export default {
   aliases: ["ytmp3", "youtubeaudio", "play", "song"],
   category: "DOWNLOAD",
   description: "Search for or download YouTube audio.",
-  usage: "yta <YouTube link or song title>",
 
   async execute(ctx) {
-    const { sock, m, from, args = [], prefix = "." } = ctx;
-    const input = args.join(" ").trim();
+    const { sock, m, from, args, prefix } = ctx;
+    const input = pickInput(args);
 
     if (!input) {
       return sock.sendMessage(
         from,
-        {
-          text: [
-            "╭─〔 *YOUTUBE AUDIO* 〕",
-            `├◦ ${prefix}yta <song title>`,
-            `╰◦ ${prefix}yta <YouTube link>`,
-            "",
-            "> POWERED BY BMEDIA-MD",
-          ].join("
-"),
-        },
+        { text: `Usage: ${prefix}yta <youtube link or song title>` },
         { quoted: m }
       );
     }
 
-    await sock.sendMessage(from, { react: { text: "⏳", key: m.key } }).catch(() => {});
-
-    (async () => {
-      let tempDir = "";
-      try {
-        const media = await requestAudioToTemp(input);
-        tempDir = media.tempDir;
-
-        await sock.sendMessage(
-          from,
-          { text: buildCaption(media.title) },
-          { quoted: m }
-        );
-
-        const sent = await sock.sendMessage(
-          from,
-          {
-            audio: { url: media.filePath },
-            mimetype: "audio/mpeg",
-            ptt: false,
-            fileName: media.fileName,
-          },
-          { quoted: m }
-        );
-
-        await sock.sendMessage(from, { react: { text: "✅", key: m.key } }).catch(() => {});
-        await cleanupTemp(tempDir);
-        return sent;
-      } catch (error) {
-        await cleanupTemp(tempDir);
-        await sock.sendMessage(from, { react: { text: "❌", key: m.key } }).catch(() => {});
-
-        return sock.sendMessage(
-          from,
-          {
-            text: [
-              "╭─〔 *YOUTUBE AUDIO ERROR* 〕",
-              `╰◦ ${error?.name === "AbortError" ? "BMEDIA-YTDL took too long to respond." : error?.message || "Audio download failed."}`,
-              "",
-              "> POWERED BY BMEDIA-MD",
-            ].join("
-"),
-          },
-          { quoted: m }
-        );
-      }
-    })().catch(() => {});
-
+    runDownload(ctx, input);
     return true;
   },
 };
