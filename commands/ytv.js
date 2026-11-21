@@ -1,4 +1,7 @@
-// commands/ytv.js — BMEDIA-MD V6.4.0 async Codespaces 504 fix
+// commands/ytv.js — BMEDIA-MD V6.5.0
+// Async YTV with progress-aware polling.
+// Does not touch YTS or YTA.
+
 import fs from "fs";
 import path from "path";
 import { Readable } from "stream";
@@ -90,7 +93,7 @@ function sleep(ms) {
 
 async function waitForVideo(jobId) {
   const { baseUrl, apiKey } = config();
-  const deadline = Date.now() + 8 * 60 * 1000;
+  const deadline = Date.now() + 6 * 60 * 1000;
 
   while (Date.now() < deadline) {
     const r = await safeFetch(
@@ -110,7 +113,7 @@ async function waitForVideo(jobId) {
       return data;
     }
 
-    await sleep(2500);
+    await sleep(1800);
   }
 
   throw new Error("Video preparation timed out.");
@@ -138,7 +141,10 @@ async function downloadMedia(mediaUrl, filePath) {
   }
 
   const body = toNodeStream(r.body);
-  if (!body) throw new Error("Video response had no body.");
+
+  if (!body) {
+    throw new Error("Video response had no body.");
+  }
 
   await pipeline(body, fs.createWriteStream(filePath));
 
@@ -197,7 +203,9 @@ function start(ctx, url) {
         { quoted: m }
       ).catch(() => {});
     } finally {
-      try { fs.rmSync(filePath, { force: true }); } catch {}
+      try {
+        fs.rmSync(filePath, { force: true });
+      } catch {}
     }
   }, 250);
 }
