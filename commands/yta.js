@@ -1,4 +1,4 @@
-// commands/yta.js — BMEDIA-MD V6.0.2
+// commands/yta.js — BMEDIA-MD V6.1.0
 import fs from "fs";
 import path from "path";
 import { Readable } from "stream";
@@ -16,102 +16,108 @@ function nodeStream(body) {
   return null;
 }
 
-function cleanName(v) {
-  return String(v || "YouTube Audio")
-    .replace(/[\\/:*?"<>|]/g, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 120);
-}
-
 function getInput(args = []) {
   const text = args.join(" ").trim();
-  const m = text.match(/https?:\/\/(?:www\.)?(?:youtube\.com\/[^\s]+|youtu\.be\/[^\s]+)/i);
-  return m?.[0] || text.replace(/^[.!/#]\s*(?:yta|ytmp3|youtubeaudio|play|song)\s+/i, "").trim();
+  const url = text.match(
+    /https?:\/\/(?:www\.)?(?:youtube\.com\/[^\s]+|youtu\.be\/[^\s]+)/i
+  )?.[0];
+
+  return url || text
+    .replace(/^[.!/#]\s*(?:yta|ytmp3|youtubeaudio|play|song)\s+/i, "")
+    .trim();
 }
 
-async function getData(input) {
+function decodeHeader(v = "") {
+  try { return decodeURIComponent(v); } catch { return ""; }
+}
+
+async function downloadFromApi(input, filePath) {
   const base = String(process.env.YTDL_API_URL || "").trim().replace(/\/+$/, "");
   const key = String(process.env.YTDL_API_KEY || "").trim();
-  if (!base) throw new Error("YTDL_API_URL is missing.");
-  if (!key) throw new Error("YTDL_API_KEY is missing.");
 
-  const r = await safeFetch(`${base}/api/yta`, {
+  const r = await safeFetch(`${base}/api/youtube`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
       "x-api-key": key,
     },
-    body: JSON.stringify({ input }),
+    body: JSON.stringify({ action: "audio", input }),
   });
 
-  const text = await r.text();
-  let data = null;
-  try { data = JSON.parse(text); } catch {}
+  if (!r.ok) {
+    let reason = `API error: HTTP ${r.status}`;
+    try {
+      const data = await r.json();
+      reason = data?.error || reason;
+    } catch {}
+    throw new Error(reason);
+  }
 
-  if (!r.ok) throw new Error(data?.error || `API error: HTTP ${r.status}`);
-  if (!data?.status) throw new Error(data?.error || "Audio request failed.");
-  if (!data.downloadUrl && !data.url) throw new Error("No audio URL returned.");
-
-  return data;
-}
-
-async function download(url, filePath) {
-  const r = await safeFetch(url, {
-    redirect: "follow",
-    headers: { "user-agent": "Mozilla/5.0" },
-  });
-  if (!r.ok) throw new Error(`Audio download failed: HTTP ${r.status}`);
-
+  const title = decodeHeader(r.headers.get("x-bmedia-title") || "") || "YouTube Audio";
   const stream = nodeStream(r.body);
-  if (!stream) throw new Error("Audio response had no body.");
+
+  if (!stream) throw new Error("No audio returned by BMEDIA-YTDL.");
 
   const ws = fs.createWriteStream(filePath);
+
   await new Promise((resolve, reject) => {
     stream.on("error", reject);
     ws.on("error", reject);
     ws.on("finish", resolve);
     stream.pipe(ws);
   });
+
+  const st = fs.statSync(filePath);
+  if (!st.size) throw new Error("Downloaded audio is empty.");
+
+  return { title };
 }
 
-function start(ctx, input) {
+function run(ctx, input) {
   const { sock, m, from } = ctx;
 
   setTimeout(async () => {
     const dir = path.join(process.cwd(), "temp");
     fs.mkdirSync(dir, { recursive: true });
 
-    let filePath = "";
+    const filePath = path.join(
+      dir,
+      `${Date.now()}_${Math.random().toString(16).slice(2)}.mp3`
+    );
 
     try {
-      await sock.sendMessage(from, { react: { text: "⏳", key: m.key } }).catch(() => {});
+      await sock.sendMessage(from, {
+        react: { text: "⏳", key: m.key },
+      }).catch(() => {});
 
-      const data = await getData(input);
-      const title = cleanName(data.title);
-      const ext = String(data.audio?.ext || data.fileName || "").toLowerCase().includes("m4a") ? "m4a" : "mp3";
-      const mimetype = data.mimetype || (ext === "m4a" ? "audio/mp4" : "audio/mpeg");
+      const result = await downloadFromApi(input, filePath);
 
-      filePath = path.join(dir, `${Date.now()}_${Math.random().toString(16).slice(2)}.${ext}`);
-      await download(data.downloadUrl || data.url, filePath);
+      await sock.sendMessage(
+        from,
+        {
+          audio: { url: filePath },
+          mimetype: "audio/mpeg",
+          ptt: false,
+          fileName: `${result.title}.mp3`,
+        },
+        { quoted: m }
+      );
 
       await sock.sendMessage(from, {
-        audio: { url: filePath },
-        mimetype,
-        ptt: false,
-        fileName: `${title}.${ext}`,
-      }, { quoted: m });
-
-      await sock.sendMessage(from, { react: { text: "✅", key: m.key } }).catch(() => {});
+        react: { text: "✅", key: m.key },
+      }).catch(() => {});
     } catch (e) {
-      await sock.sendMessage(from, { react: { text: "❌", key: m.key } }).catch(() => {});
       await sock.sendMessage(from, {
-        text: `❌ download unsuccessful\nReason: ${e?.message || e}`,
-      }, { quoted: m }).catch(() => {});
+        react: { text: "❌", key: m.key },
+      }).catch(() => {});
+
+      await sock.sendMessage(
+        from,
+        { text: `❌ download unsuccessful\nReason: ${e?.message || e}` },
+        { quoted: m }
+      ).catch(() => {});
     } finally {
-      if (filePath) {
-        try { fs.rmSync(filePath, { force: true }); } catch {}
-      }
+      try { fs.rmSync(filePath, { force: true }); } catch {}
     }
   }, 250);
 }
@@ -121,17 +127,20 @@ export default {
   aliases: ["ytmp3", "youtubeaudio", "play", "song"],
   category: "DOWNLOAD",
   description: "Download YouTube audio.",
+
   async execute(ctx) {
     const { sock, m, from, args = [], prefix = "." } = ctx;
     const input = getInput(args);
 
     if (!input) {
-      return sock.sendMessage(from, {
-        text: `Usage: ${prefix}yta <YouTube link or song title>`,
-      }, { quoted: m });
+      return sock.sendMessage(
+        from,
+        { text: `Usage: ${prefix}yta <YouTube link or song title>` },
+        { quoted: m }
+      );
     }
 
-    start(ctx, input);
+    run(ctx, input);
     return true;
   },
 };
