@@ -1,4 +1,4 @@
-
+// commands/ytv.js — BMEDIA-MD V6.4.0 async Codespaces 504 fix
 import fs from "fs";
 import path from "path";
 import { Readable } from "stream";
@@ -17,7 +17,7 @@ function toNodeStream(body) {
   return null;
 }
 
-function apiConfig() {
+function config() {
   const baseUrl = String(process.env.YTDL_API_URL || "")
     .trim()
     .replace(/\/+$/, "");
@@ -30,56 +30,6 @@ function apiConfig() {
   return { baseUrl, apiKey };
 }
 
-function decodeHeader(v = "") {
-  try { return decodeURIComponent(v); }
-  catch { return ""; }
-}
-
-function cleanName(value = "", fallback = "YouTube Media") {
-  return String(value || fallback)
-    .replace(/[\\/:*?"<>|]/g, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 120) || fallback;
-}
-
-async function apiError(response) {
-  try {
-    const data = await response.json();
-    return data?.error || data?.message || `HTTP ${response.status}`;
-  } catch {
-    return `HTTP ${response.status}`;
-  }
-}
-
-async function saveResponseBody(response, filePath) {
-  const body = toNodeStream(response.body);
-  if (!body) throw new Error("Media response had no body.");
-
-  await pipeline(body, fs.createWriteStream(filePath));
-
-  const stat = fs.statSync(filePath);
-  return stat.size;
-}
-
-async function downloadUrlToFile(url, filePath, accept) {
-  const r = await safeFetch(url, {
-    method: "GET",
-    redirect: "follow",
-    headers: {
-      "user-agent": "Mozilla/5.0",
-      accept,
-    },
-  });
-
-  if (!r.ok) {
-    throw new Error(`Media download failed: HTTP ${r.status}`);
-  }
-
-  return saveResponseBody(r, filePath);
-}
-
-
 function pickUrl(args = []) {
   const text = args.join(" ").trim();
 
@@ -88,10 +38,35 @@ function pickUrl(args = []) {
   )?.[0] || "";
 }
 
-async function fetchVideo(url, filePath) {
-  const { baseUrl, apiKey } = apiConfig();
+function cleanName(value = "") {
+  return String(value || "YouTube Video")
+    .replace(/[\\/:*?"<>|]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 120);
+}
 
-  const response = await safeFetch(`${baseUrl}/youtube/video`, {
+async function readJson(response) {
+  const text = await response.text();
+  let data = null;
+
+  try { data = JSON.parse(text); } catch {}
+
+  if (!response.ok) {
+    throw new Error(
+      data?.error ||
+      data?.message ||
+      `API error: HTTP ${response.status}`
+    );
+  }
+
+  return data;
+}
+
+async function startJob(url) {
+  const { baseUrl, apiKey } = config();
+
+  const r = await safeFetch(`${baseUrl}/youtube/video`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -100,55 +75,80 @@ async function fetchVideo(url, filePath) {
     body: JSON.stringify({ url }),
   });
 
-  if (!response.ok) {
-    throw new Error(await apiError(response));
+  const data = await readJson(r);
+
+  if (!data?.status || !data?.jobId) {
+    throw new Error(data?.error || "Video job could not be started.");
   }
 
-  const contentType = String(response.headers.get("content-type") || "").toLowerCase();
+  return data.jobId;
+}
 
-  // Preferred V6.3 behavior: backend returns final MP4 binary.
-  if (!contentType.includes("application/json")) {
-    const size = await saveResponseBody(response, filePath);
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
 
-    if (size < 5000) {
-      throw new Error("Downloaded video is invalid.");
+async function waitForVideo(jobId) {
+  const { baseUrl, apiKey } = config();
+  const deadline = Date.now() + 8 * 60 * 1000;
+
+  while (Date.now() < deadline) {
+    const r = await safeFetch(
+      `${baseUrl}/youtube/video/status/${encodeURIComponent(jobId)}`,
+      {
+        method: "GET",
+        headers: {
+          accept: "application/json",
+          "x-api-key": apiKey,
+        },
+      }
+    );
+
+    const data = await readJson(r);
+
+    if (data?.state === "ready" && data?.mediaUrl) {
+      return data;
     }
 
-    return {
-      title: cleanName(
-        decodeHeader(response.headers.get("x-bmedia-title") || ""),
-        "YouTube Video"
-      ),
-    };
+    await sleep(2500);
   }
 
-  // Backward compatibility with earlier backend builds that returned JSON.
-  const data = await response.json();
+  throw new Error("Video preparation timed out.");
+}
 
-  const mediaUrl =
-    data?.mediaUrl ||
-    data?.downloadUrl ||
-    data?.url ||
-    data?.video?.[0]?.url ||
-    "";
+async function downloadMedia(mediaUrl, filePath) {
+  const { baseUrl, apiKey } = config();
 
-  if (!data?.status || !mediaUrl) {
-    throw new Error(data?.error || "Video was not prepared.");
+  const fullUrl = /^https?:\/\//i.test(mediaUrl)
+    ? mediaUrl
+    : `${baseUrl}${mediaUrl.startsWith("/") ? "" : "/"}${mediaUrl}`;
+
+  const r = await safeFetch(fullUrl, {
+    method: "GET",
+    redirect: "follow",
+    headers: {
+      "x-api-key": apiKey,
+      "user-agent": "Mozilla/5.0",
+      accept: "video/mp4,video/*;q=0.9,*/*;q=0.8",
+    },
+  });
+
+  if (!r.ok) {
+    throw new Error(`Video download failed: HTTP ${r.status}`);
   }
 
-  const size = await downloadUrlToFile(
-    mediaUrl,
-    filePath,
-    "video/mp4,video/*;q=0.9,*/*;q=0.8"
-  );
+  const body = toNodeStream(r.body);
+  if (!body) throw new Error("Video response had no body.");
 
-  if (size < 5000) {
+  await pipeline(body, fs.createWriteStream(filePath));
+
+  const stat = fs.statSync(filePath);
+
+  if (!stat.size || stat.size < 5000) {
     throw new Error("Downloaded video is invalid.");
   }
 
-  return {
-    title: cleanName(data.title, "YouTube Video"),
-  };
+  return stat.size;
 }
 
 function start(ctx, url) {
@@ -168,14 +168,17 @@ function start(ctx, url) {
         react: { text: "⏳", key: m.key },
       }).catch(() => {});
 
-      const result = await fetchVideo(url, filePath);
+      const jobId = await startJob(url);
+      const ready = await waitForVideo(jobId);
+
+      await downloadMedia(ready.mediaUrl, filePath);
 
       await sock.sendMessage(
         from,
         {
           video: { url: filePath },
           mimetype: "video/mp4",
-          caption: result.title,
+          caption: cleanName(ready.title),
         },
         { quoted: m }
       );
