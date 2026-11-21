@@ -57,7 +57,8 @@
     "tesseract.js": "^7.0.0",
 
     "wa-sticker-formatter": "^4.4.4",
-    "mongodb": "^6.16.0"
+    "mongodb": "^6.16.0",
+    "yt-search": "2.13.1"
 
   }
 
