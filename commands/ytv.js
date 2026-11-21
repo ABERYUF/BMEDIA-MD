@@ -35,10 +35,7 @@ export default {
             "> POWERED BY BMEDIA-MD",
           ].join("\n"),
         },
-        {
-          quoted: m,
-          mediaUploadTimeoutMs: 180_000,
-        }
+        { quoted: m }
       );
     }
 
@@ -75,7 +72,10 @@ export default {
           mimetype: "video/mp4",
           caption,
         },
-        { quoted: m }
+        {
+          quoted: m,
+          mediaUploadTimeoutMs: 180_000,
+        }
       );
 
       await sock

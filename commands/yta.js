@@ -37,10 +37,7 @@ export default {
             "> POWERED BY BMEDIA-MD",
           ].join("\n"),
         },
-        {
-          quoted: m,
-          mediaUploadTimeoutMs: 180_000,
-        }
+        { quoted: m }
       );
     }
 
@@ -70,7 +67,10 @@ export default {
           ptt: false,
           fileName: `${safeFileName(title, "YouTube Audio")}.m4a`,
         },
-        { quoted: m }
+        {
+          quoted: m,
+          mediaUploadTimeoutMs: 180_000,
+        }
       );
 
       await sock
