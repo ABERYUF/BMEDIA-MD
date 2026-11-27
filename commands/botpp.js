@@ -1,20 +1,13 @@
-// commands/botpp.js (ESM)
-// Owner-only:
-// - user must reply to an image
-// - deletes assets/logo.png
-// - replaces it with the replied image
-// - converts non-png images to png
-// - sends the new menu image with confirmation caption
-
-import fs from "fs";
-import path from "path";
-import { spawn } from "child_process";
-import ffmpegPath from "ffmpeg-static";
+// commands/botpp.js (ESM) — FFmpeg-free logo update
+import fs from "node:fs/promises";
+import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { downloadContentFromMessage } from "@whiskeysockets/baileys";
 import { isOwner } from "../checks/isOwner.js";
 
-const ASSETS_DIR = path.join(process.cwd(), "assets");
-const LOGO_PATH = path.join(ASSETS_DIR, "logo.png");
+const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
+const MAX_PIXELS = 25_000_000;
+const MAX_SIDE = 2048;
 
 function getContextInfo(m) {
   const msg = m?.message || {};
@@ -52,49 +45,45 @@ function getQuotedImageMessage(m) {
   return null;
 }
 
-async function streamToBuffer(stream) {
+async function downloadQuotedImageBuffer(imageMsg) {
+  const stream = await downloadContentFromMessage(imageMsg, "image");
   const chunks = [];
-  for await (const chunk of stream) chunks.push(chunk);
+  let size = 0;
+  for await (const chunk of stream) {
+    size += chunk.length;
+    if (size > MAX_IMAGE_BYTES) throw new Error("Image exceeds 20 MB.");
+    chunks.push(Buffer.from(chunk));
+  }
+  if (!size) throw new Error("Invalid image data.");
   return Buffer.concat(chunks);
 }
 
-async function downloadQuotedImageBuffer(imageMsg) {
-  const stream = await downloadContentFromMessage(imageMsg, "image");
-  return streamToBuffer(stream);
-}
-
-function mimeToExt(mime = "") {
-  const m = String(mime || "").toLowerCase();
-  if (m.includes("png")) return ".png";
-  if (m.includes("jpeg") || m.includes("jpg")) return ".jpg";
-  if (m.includes("webp")) return ".webp";
-  return ".img";
-}
-
-function runFfmpeg(args) {
-  return new Promise((resolve, reject) => {
-    const p = spawn(ffmpegPath, args, { stdio: ["ignore", "ignore", "pipe"] });
-    let err = "";
-
-    p.stderr.on("data", (d) => {
-      err += d?.toString?.() ?? String(d ?? "");
-    });
-
-    p.on("close", (code) => {
-      if (code === 0) resolve(true);
-      else reject(new Error(`ffmpeg failed (${code}): ${err.slice(-700)}`));
-    });
-  });
-}
-
-async function ensureDir(dir) {
-  await fs.promises.mkdir(dir, { recursive: true });
-}
-
-async function rmSafe(filePath) {
+async function convertToPng(buffer) {
+  // Lazy imports keep the command loadable even if a native library is missing.
+  let sharpError;
   try {
-    await fs.promises.rm(filePath, { force: true, recursive: true });
-  } catch {}
+    const { default: sharp } = await import("sharp");
+    return await sharp(buffer, { limitInputPixels: MAX_PIXELS })
+      .rotate()
+      .resize({ width: MAX_SIDE, height: MAX_SIDE, fit: "inside", withoutEnlargement: true })
+      .png()
+      .toBuffer();
+  } catch (error) {
+    sharpError = error;
+  }
+  // Jimp is already installed in BMEDIA-MD and MINI; no FFmpeg executable needed.
+  try {
+    const { Jimp } = await import("jimp");
+    const image = await Jimp.read(buffer);
+    const { width, height } = image.bitmap;
+    if (width * height > MAX_PIXELS) throw new Error("Image dimensions are too large.");
+    const scale = Math.min(1, MAX_SIDE / Math.max(width, height));
+    if (scale < 1) image.resize({ w: Math.max(1, Math.round(width * scale)), h: Math.max(1, Math.round(height * scale)) });
+    return await image.getBuffer("image/png");
+  } catch (error) {
+    console.warn("[botpp] Image conversion failed:", sharpError?.code || sharpError?.message, error?.code || error?.message);
+    throw new Error("Could not convert image. Try a valid JPEG or PNG image.");
+  }
 }
 
 export default {
@@ -106,66 +95,34 @@ export default {
 
   async execute(ctx) {
     const { sock, m, from, senderJid, sender } = ctx;
-
     if (!isOwner({ senderJid: senderJid || sender })) {
       return sock.sendMessage(from, { text: "❌ Owner only." }, { quoted: m });
     }
-
     const quotedImage = getQuotedImageMessage(m);
     if (!quotedImage) {
-      return sock.sendMessage(
-        from,
-        { text: "❌ Reply to an image to set it as the bot picture." },
-        { quoted: m }
-      );
+      return sock.sendMessage(from, { text: "❌ Reply to an image to set it as the bot picture." }, { quoted: m });
     }
 
-    const tempDir = path.join(process.cwd(), "temp");
-    const id = `${Date.now()}_${Math.random().toString(16).slice(2)}`;
-    const inputExt = mimeToExt(quotedImage.mimetype || "");
-    const inputPath = path.join(tempDir, `${id}${inputExt}`);
-    const outputPath = LOGO_PATH;
-
+    // MINI forks each bot with its own cwd. Keep the logo in that bot's assets.
+    const assetsDir = path.join(process.cwd(), "assets");
+    const logoPath = path.join(assetsDir, "logo.png");
+    const pendingPath = path.join(assetsDir, `.logo-${randomUUID()}.tmp`);
+    let png;
     try {
-      await ensureDir(tempDir);
-      await ensureDir(ASSETS_DIR);
-
       const imageBuffer = await downloadQuotedImageBuffer(quotedImage);
-      if (!imageBuffer || imageBuffer.length < 100) {
-        throw new Error("Invalid image data.");
-      }
-
-      await fs.promises.writeFile(inputPath, imageBuffer);
-
-      await rmSafe(outputPath);
-
-      if (inputExt === ".png") {
-        await fs.promises.copyFile(inputPath, outputPath);
-      } else {
-        await runFfmpeg([
-          "-y",
-          "-i", inputPath,
-          "-frames:v", "1",
-          outputPath,
-        ]);
-      }
-
-      return sock.sendMessage(
-        from,
-        {
-          image: { url: outputPath },
-          caption: `✅ Bot menu image updated\n\n> POWERED BY BMEDIA`,
-        },
-        { quoted: m }
-      );
+      png = await convertToPng(imageBuffer);
+      // Never remove the current logo before a replacement is ready.
+      await fs.mkdir(assetsDir, { recursive: true });
+      await fs.writeFile(pendingPath, png, { flag: "wx" });
+      await fs.rename(pendingPath, logoPath);
     } catch (error) {
-      return sock.sendMessage(
-        from,
-        { text: `❌ Failed to update bot image\nReason: ${error?.message || error}` },
-        { quoted: m }
-      );
+      return sock.sendMessage(from, { text: `❌ Failed to update bot image\nReason: ${error?.message || error}` }, { quoted: m });
     } finally {
-      await rmSafe(inputPath);
+      await fs.rm(pendingPath, { force: true }).catch(() => {});
     }
+    return sock.sendMessage(from, {
+      image: png,
+      caption: "✅ Bot menu image updated\n\n> POWERED BY BMEDIA",
+    }, { quoted: m });
   },
 };
